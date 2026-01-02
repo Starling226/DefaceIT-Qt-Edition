@@ -27,7 +27,16 @@ class VideoProcessor(
         
         if (x2 <= x1 || y2 <= y1) return bitmap
         
-        val roi = Bitmap.createBitmap(bitmap, x1, y1, x2 - x1, y2 - y1)
+        // Calculate region dimensions and ensure they don't exceed bitmap bounds
+        val roiWidth = (x2 - x1).coerceAtMost(bitmap.width - x1).coerceAtLeast(1)
+        val roiHeight = (y2 - y1).coerceAtMost(bitmap.height - y1).coerceAtLeast(1)
+        
+        // Final safety check: ensure x1 + roiWidth <= bitmap.width and y1 + roiHeight <= bitmap.height
+        if (x1 + roiWidth > bitmap.width || y1 + roiHeight > bitmap.height) {
+            return bitmap
+        }
+        
+        val roi = Bitmap.createBitmap(bitmap, x1, y1, roiWidth, roiHeight)
         val blurred = when (blurType) {
             "pixelate" -> pixelate(roi)
             else -> simpleBlur(roi, blurStrength)
