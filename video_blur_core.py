@@ -9,6 +9,12 @@ import time
 import subprocess
 import os
 
+try:
+    import mediapipe as mp
+    MEDIAPIPE_AVAILABLE = True
+except ImportError:
+    MEDIAPIPE_AVAILABLE = False
+
 
 class VideoBlurrer:
     
@@ -46,14 +52,22 @@ class VideoBlurrer:
         
         self.device = device
         self.models = []
+        self.face_detector = None
         
         if detect_faces:
-            if face_model_path:
-                face_model = YOLO(face_model_path)
+            if MEDIAPIPE_AVAILABLE:
+                self.mp_face_detection = mp.solutions.face_detection
+                self.face_detector = self.mp_face_detection.FaceDetection(
+                    model_selection=1,
+                    min_detection_confidence=self.confidence
+                )
             else:
-                face_model = YOLO("yolo11n.pt")
-            face_model.to(device)
-            self.models.append(("face", face_model))
+                if face_model_path:
+                    face_model = YOLO(face_model_path)
+                else:
+                    face_model = YOLO("yolo11n.pt")
+                face_model.to(device)
+                self.models.append(("face", face_model))
         
         if detect_license_plates:
             if license_plate_model_path:
@@ -100,6 +114,27 @@ class VideoBlurrer:
         return frame
     
     def process_frame(self, frame: np.ndarray) -> np.ndarray:
+        if self.detect_faces and self.face_detector is not None:
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = self.face_detector.process(rgb_frame)
+            
+            if results.detections:
+                h, w = frame.shape[:2]
+                for detection in results.detections:
+                    bbox = detection.location_data.relative_bounding_box
+                    x1 = int(bbox.xmin * w)
+                    y1 = int(bbox.ymin * h)
+                    x2 = int((bbox.xmin + bbox.width) * w)
+                    y2 = int((bbox.ymin + bbox.height) * h)
+                    
+                    x1 = max(0, x1)
+                    y1 = max(0, y1)
+                    x2 = min(w, x2)
+                    y2 = min(h, y2)
+                    
+                    if x2 > x1 and y2 > y1:
+                        self.blur_region(frame, (x1, y1, x2, y2), padding=self.face_padding)
+        
         for model_type, model in self.models:
             results = model(frame, conf=self.confidence, iou=0.5, verbose=False)
             
@@ -113,16 +148,7 @@ class VideoBlurrer:
                     cls = int(box.cls[0].cpu().numpy())
                     
                     if model_type == "face":
-                        if cls == 0:
-                            height = y2 - y1
-                            width = x2 - x1
-                            face_y1 = y1
-                            face_y2 = y1 + int(height * 0.5)
-                            face_x1 = max(0, x1 - int(width * 0.1))
-                            face_x2 = min(frame.shape[1], x2 + int(width * 0.1))
-                            self.blur_region(frame, (face_x1, face_y1, face_x2, face_y2), padding=self.face_padding)
-                        else:
-                            self.blur_region(frame, (x1, y1, x2, y2), padding=self.face_padding)
+                        self.blur_region(frame, (x1, y1, x2, y2), padding=self.face_padding)
                     
                     elif model_type == "license_plate":
                         self.blur_region(frame, (x1, y1, x2, y2), padding=0.1)
