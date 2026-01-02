@@ -4,7 +4,7 @@
   <a href="#defaceit-فارسی">راهنمای فارسی</a> | <a href="#defaceit-فارسی">Persian Guide</a>
 </p>
 
-DefaceIT is a cross-platform GUI application for blurring faces and license plates in videos using YOLOv11. The app supports both English and Persian languages.
+DefaceIT is a cross-platform application for blurring faces and license plates in videos using YOLOv11. The app supports both English and Persian languages and is available for desktop (macOS, Linux, Windows) and Android.
 
 ## Features
 
@@ -13,9 +13,10 @@ DefaceIT is a cross-platform GUI application for blurring faces and license plat
 - Accurate detection using YOLOv11-based face and license plate detection
 - Audio preservation with automatic audio merging
 - Audio pitch shifting with preview functionality
-- Cross-platform support (macOS, Linux, Windows)
+- Cross-platform support (macOS, Linux, Windows, Android)
 - Bilingual interface (English and Persian)
 - Customizable settings (blur strength, confidence, blur type)
+- Native Android app with modern Material Design UI
 
 ## Requirements
 
@@ -88,6 +89,49 @@ The `run.py` script will automatically:
 6. Click "Start Processing"
 7. Wait for processing to complete
 8. Your blurred video will be saved with audio preserved
+
+## Android App
+
+DefaceIT is also available as a native Android application with a modern Material Design interface.
+
+### Download
+
+Download the latest release APK from the [Releases](https://github.com/therealaleph/DefaceIT/releases) page or build it yourself.
+
+### Requirements
+
+- Android 7.0 (API level 24) or higher
+- Camera permission (optional, for future camera features)
+- Storage permission (for reading and saving videos)
+
+### Installation
+
+1. Download the `DefaceIT-release.apk` from the releases page
+2. Enable "Install from Unknown Sources" in your Android settings
+3. Open the downloaded APK file
+4. Follow the installation prompts
+
+### Features
+
+- Modern Material Design 3 UI built with Jetpack Compose
+- Face detection using Google ML Kit
+- Real-time video processing
+- Audio pitch shifting support
+- Bilingual interface (English and Persian)
+- Same powerful blurring capabilities as the desktop version
+
+### Building from Source
+
+To build the Android app from source:
+
+1. Open the project in Android Studio
+2. Sync Gradle dependencies
+3. Build the release APK:
+   ```bash
+   cd DefaceIT
+   ./gradlew assembleRelease
+   ```
+4. The APK will be located at `DefaceIT/app/build/outputs/apk/release/`
 
 ## Building Standalone Executable
 
@@ -188,7 +232,7 @@ python3 defaceit_gui.py
 <a id="defaceit-فارسی"></a>
 # DefaceIT (فارسی)
 
-DefaceIT یک برنامه گرافیکی چند پلتفرمی برای تار کردن چهره‌ها و پلاک‌ها در ویدیوها با استفاده از YOLOv11 است. این برنامه از زبان‌های انگلیسی و فارسی پشتیبانی می‌کند.
+DefaceIT یک برنامه چند پلتفرمی برای تار کردن چهره‌ها و پلاک‌ها در ویدیوها با استفاده از YOLOv11 است. این برنامه از زبان‌های انگلیسی و فارسی پشتیبانی می‌کند و برای دسکتاپ (macOS, Linux, Windows) و اندروید در دسترس است.
 
 ## ویژگی‌ها
 
@@ -197,9 +241,10 @@ DefaceIT یک برنامه گرافیکی چند پلتفرمی برای تار 
 - تشخیص دقیق با استفاده از YOLOv11
 - حفظ صدا با ادغام خودکار صدا
 - تغییر زیر و بم صدا با قابلیت پیش‌نمایش
-- پشتیبانی از چند پلتفرم (macOS, Linux, Windows)
+- پشتیبانی از چند پلتفرم (macOS, Linux, Windows, Android)
 - رابط دو زبانه (انگلیسی و فارسی)
 - تنظیمات قابل تنظیم
+- برنامه اندروید بومی با رابط کاربری Material Design مدرن
 
 ## نیازمندی‌ها
 
@@ -272,6 +317,49 @@ DefaceIT یک برنامه گرافیکی چند پلتفرمی برای تار 
 6. روی "شروع پردازش" کلیک کنید
 7. منتظر بمانید تا پردازش کامل شود
 8. ویدیوی تار شده شما با صدا حفظ شده ذخیره می‌شود
+
+## برنامه اندروید
+
+DefaceIT همچنین به عنوان یک برنامه اندروید بومی با رابط کاربری Material Design مدرن در دسترس است.
+
+### دانلود
+
+آخرین نسخه APK را از صفحه [Releases](https://github.com/therealaleph/DefaceIT/releases) دانلود کنید یا خودتان آن را بسازید.
+
+### نیازمندی‌ها
+
+- اندروید 7.0 (سطح API 24) یا بالاتر
+- مجوز دوربین (اختیاری، برای ویژگی‌های آینده دوربین)
+- مجوز ذخیره‌سازی (برای خواندن و ذخیره ویدیوها)
+
+### نصب
+
+1. فایل `DefaceIT-release.apk` را از صفحه releases دانلود کنید
+2. "نصب از منابع ناشناخته" را در تنظیمات اندروید خود فعال کنید
+3. فایل APK دانلود شده را باز کنید
+4. دستورالعمل‌های نصب را دنبال کنید
+
+### ویژگی‌ها
+
+- رابط کاربری Material Design 3 مدرن ساخته شده با Jetpack Compose
+- تشخیص چهره با استفاده از Google ML Kit
+- پردازش ویدیو در زمان واقعی
+- پشتیبانی از تغییر زیر و بم صدا
+- رابط دو زبانه (انگلیسی و فارسی)
+- همان قابلیت‌های قدرتمند تار کردن نسخه دسکتاپ
+
+### ساخت از منبع
+
+برای ساخت برنامه اندروید از منبع:
+
+1. پروژه را در Android Studio باز کنید
+2. وابستگی‌های Gradle را همگام‌سازی کنید
+3. APK نسخه release را بسازید:
+   ```bash
+   cd DefaceIT
+   ./gradlew assembleRelease
+   ```
+4. فایل APK در مسیر `DefaceIT/app/build/outputs/apk/release/` قرار خواهد گرفت
 
 ## ساخت فایل اجرایی مستقل
 
