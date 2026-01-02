@@ -18,6 +18,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      artifacts: write
     
     steps:
       - name: Checkout code
@@ -61,6 +64,8 @@ jobs:
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
+        permissions:
+          contents: write
         with:
           files: DefaceIT/app/build/outputs/apk/release/app-release.apk
           name: DefaceIT Android v${{ steps.version.outputs.version_name }}
@@ -90,6 +95,4 @@ jobs:
             See commit history for detailed changes.
           draft: false
           prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
