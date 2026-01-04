@@ -60,11 +60,16 @@ jobs:
           echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
           echo "Version: $VERSION_NAME (Code: $VERSION_CODE)"
 
+      - name: Rename APK with version
+        working-directory: DefaceIT
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/DefaceIT-v${{ steps.version.outputs.version_name }}.apk
+
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: DefaceIT/app/build/outputs/apk/release/app-release.apk
+          files: DefaceIT/app/build/outputs/apk/release/DefaceIT-v${{ steps.version.outputs.version_name }}.apk
           name: DefaceIT Android v${{ steps.version.outputs.version_name }}
           body: |
             ## DefaceIT Android App Release v${{ steps.version.outputs.version_name }}
