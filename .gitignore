@@ -37,3 +37,7 @@ Thumbs.db
 # Output files
 *_blurred.*
 
+# Web app uploads and outputs
+uploads/
+outputs/
+

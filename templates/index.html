@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DefaceIT - Video Face & License Plate Blurring</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 800px;
+            width: 100%;
+            padding: 40px;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+            text-align: center;
+        }
+        
+        .subtitle {
+            color: #666;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+        
+        .upload-section {
+            border: 3px dashed #667eea;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            margin-bottom: 30px;
+            background: #f8f9ff;
+            transition: all 0.3s ease;
+        }
+        
+        .upload-section:hover {
+            border-color: #764ba2;
+            background: #f0f2ff;
+        }
+        
+        .upload-section.drag-over {
+            border-color: #764ba2;
+            background: #e8ebff;
+        }
+        
+        .file-input-wrapper {
+            position: relative;
+            overflow: hidden;
+            display: inline-block;
+        }
+        
+        .file-input-wrapper input[type=file] {
+            position: absolute;
+            left: -9999px;
+        }
+        
+        .file-input-wrapper label {
+            background: #667eea;
+            color: white;
+            padding: 15px 40px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1.1em;
+            font-weight: 600;
+            transition: background 0.3s ease;
+            display: inline-block;
+        }
+        
+        .file-input-wrapper label:hover {
+            background: #764ba2;
+        }
+        
+        .selected-file {
+            margin-top: 15px;
+            color: #333;
+            font-weight: 500;
+        }
+        
+        .settings {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        
+        .settings h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.3em;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 500;
+        }
+        
+        .form-group input[type="range"] {
+            width: 100%;
+            height: 8px;
+            border-radius: 5px;
+            background: #ddd;
+            outline: none;
+            -webkit-appearance: none;
+        }
+        
+        .form-group input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+        }
+        
+        .form-group input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+            border: none;
+        }
+        
+        .form-group select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 1em;
+            background: white;
+        }
+        
+        .checkbox-group {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .checkbox-group label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+        }
+        
+        .checkbox-group input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+        
+        .range-value {
+            display: inline-block;
+            margin-left: 10px;
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .submit-btn {
+            background: #667eea;
+            color: white;
+            padding: 15px 40px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.2em;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            transition: background 0.3s ease;
+        }
+        
+        .submit-btn:hover:not(:disabled) {
+            background: #764ba2;
+        }
+        
+        .submit-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .progress-section {
+            display: none;
+            margin-top: 20px;
+        }
+        
+        .progress-section.active {
+            display: block;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #e0e0e0;
+            border-radius: 15px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+        
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+        }
+        
+        .status-message {
+            text-align: center;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+        }
+        
+        .status-message.success {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status-message.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .status-message.info {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+        
+        .download-btn {
+            display: inline-block;
+            background: #28a745;
+            color: white;
+            padding: 15px 40px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            margin-top: 15px;
+            transition: background 0.3s ease;
+        }
+        
+        .download-btn:hover {
+            background: #218838;
+        }
+        
+        .reset-btn {
+            display: inline-block;
+            background: #6c757d;
+            color: white;
+            padding: 10px 30px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            margin-left: 10px;
+            cursor: pointer;
+            border: none;
+            transition: background 0.3s ease;
+        }
+        
+        .reset-btn:hover {
+            background: #5a6268;
+        }
+        
+        .info-text {
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+        
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            color: white;
+            font-size: 0.9em;
+        }
+        
+        .footer a {
+            color: white;
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎭 DefaceIT</h1>
+        <p class="subtitle">Blur faces and license plates in your videos automatically</p>
+        
+        <form id="uploadForm" enctype="multipart/form-data">
+            <div class="upload-section" id="dropZone">
+                <div class="file-input-wrapper">
+                    <input type="file" id="videoFile" name="video" accept="video/*" required>
+                    <label for="videoFile">Choose Video File</label>
+                </div>
+                <p style="margin-top: 15px; color: #666;">or drag and drop a video file here</p>
+                <div class="selected-file" id="selectedFile"></div>
+            </div>
+            
+            <div class="settings">
+                <h2>⚙️ Settings</h2>
+                
+                <div class="form-group">
+                    <label>
+                        Blur Strength: <span class="range-value" id="blurStrengthValue">51</span>
+                    </label>
+                    <input type="range" id="blurStrength" name="blur_strength" min="21" max="101" step="2" value="51">
+                    <p class="info-text">Higher values = more blur</p>
+                </div>
+                
+                <div class="form-group">
+                    <label>
+                        Detection Confidence: <span class="range-value" id="confidenceValue">0.15</span>
+                    </label>
+                    <input type="range" id="confidence" name="confidence" min="0.05" max="0.5" step="0.01" value="0.15">
+                    <p class="info-text">Lower values = more detections (may include false positives)</p>
+                </div>
+                
+                <div class="form-group">
+                    <label>Blur Type:</label>
+                    <select id="blurType" name="blur_type">
+                        <option value="gaussian">Gaussian Blur</option>
+                        <option value="pixelate">Pixelate</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label>Device:</label>
+                    <select id="device" name="device">
+                        <option value="auto">Auto-detect</option>
+                        <option value="cpu">CPU</option>
+                        <option value="cuda">GPU (CUDA)</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label>What to Blur:</label>
+                    <div class="checkbox-group">
+                        <label>
+                            <input type="checkbox" id="detectFaces" name="detect_faces" value="true" checked>
+                            Faces
+                        </label>
+                        <label>
+                            <input type="checkbox" id="detectPlates" name="detect_license_plates" value="true" checked>
+                            License Plates
+                        </label>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label>
+                        Audio Pitch Shift: <span class="range-value" id="pitchShiftValue">0</span> semitones
+                    </label>
+                    <input type="range" id="pitchShift" name="pitch_shift" min="-12" max="12" step="1" value="0">
+                    <p class="info-text">Adjust voice pitch (0 = no change, negative = lower, positive = higher)</p>
+                </div>
+            </div>
+            
+            <button type="submit" class="submit-btn" id="submitBtn">
+                🚀 Process Video
+            </button>
+        </form>
+        
+        <div class="progress-section" id="progressSection">
+            <div class="progress-bar">
+                <div class="progress-bar-fill" id="progressBarFill" style="width: 0%;">0%</div>
+            </div>
+            <div class="status-message info" id="statusMessage">
+                Uploading and processing your video...
+            </div>
+            <div id="downloadSection"></div>
+        </div>
+    </div>
+    
+    <div class="footer">
+        Powered by <a href="https://github.com/pourmand1376/DefaceIT" target="_blank">DefaceIT</a>
+    </div>
+    
+    <script>
+        const form = document.getElementById('uploadForm');
+        const videoFile = document.getElementById('videoFile');
+        const selectedFile = document.getElementById('selectedFile');
+        const submitBtn = document.getElementById('submitBtn');
+        const progressSection = document.getElementById('progressSection');
+        const progressBarFill = document.getElementById('progressBarFill');
+        const statusMessage = document.getElementById('statusMessage');
+        const downloadSection = document.getElementById('downloadSection');
+        const dropZone = document.getElementById('dropZone');
+        
+        // Range sliders
+        const blurStrength = document.getElementById('blurStrength');
+        const blurStrengthValue = document.getElementById('blurStrengthValue');
+        const confidence = document.getElementById('confidence');
+        const confidenceValue = document.getElementById('confidenceValue');
+        const pitchShift = document.getElementById('pitchShift');
+        const pitchShiftValue = document.getElementById('pitchShiftValue');
+        
+        blurStrength.addEventListener('input', (e) => {
+            blurStrengthValue.textContent = e.target.value;
+        });
+        
+        confidence.addEventListener('input', (e) => {
+            confidenceValue.textContent = e.target.value;
+        });
+        
+        pitchShift.addEventListener('input', (e) => {
+            pitchShiftValue.textContent = e.target.value;
+        });
+        
+        videoFile.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                const file = e.target.files[0];
+                selectedFile.textContent = `Selected: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+            }
+        });
+        
+        // Drag and drop
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drag-over');
+        });
+        
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('drag-over');
+        });
+        
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over');
+            
+            if (e.dataTransfer.files.length > 0) {
+                videoFile.files = e.dataTransfer.files;
+                const file = e.dataTransfer.files[0];
+                selectedFile.textContent = `Selected: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+            }
+        });
+        
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            if (!videoFile.files.length) {
+                alert('Please select a video file');
+                return;
+            }
+            
+            const formData = new FormData(form);
+            
+            // Show progress section
+            progressSection.classList.add('active');
+            submitBtn.disabled = true;
+            submitBtn.textContent = '⏳ Processing...';
+            statusMessage.className = 'status-message info';
+            statusMessage.textContent = 'Uploading video...';
+            downloadSection.innerHTML = '';
+            
+            try {
+                // Upload video
+                const uploadResponse = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!uploadResponse.ok) {
+                    throw new Error('Upload failed');
+                }
+                
+                const uploadData = await uploadResponse.json();
+                const jobId = uploadData.job_id;
+                
+                statusMessage.textContent = 'Processing video... This may take a while depending on video size.';
+                
+                // Poll for status with adaptive interval
+                let pollDelay = 2000; // Start with 2 seconds
+                let consecutiveUnchanged = 0;
+                let lastProgress = 0;
+                
+                const pollStatus = async () => {
+                    try {
+                        const statusResponse = await fetch(`/status/${jobId}`);
+                        const statusData = await statusResponse.json();
+                        
+                        progressBarFill.style.width = statusData.progress + '%';
+                        progressBarFill.textContent = statusData.progress + '%';
+                        
+                        // Adjust polling interval based on progress  
+                        if (statusData.progress === lastProgress) {
+                            consecutiveUnchanged++;
+                            if (consecutiveUnchanged > 3) {
+                                pollDelay = Math.min(pollDelay * 1.5, 5000); // Exponential backoff, max 5 seconds
+                            }
+                        } else {
+                            consecutiveUnchanged = 0;
+                            pollDelay = 2000; // Reset to 2 seconds when making progress
+                        }
+                        lastProgress = statusData.progress;
+                        
+                        if (statusData.status === 'completed') {
+                            statusMessage.className = 'status-message success';
+                            statusMessage.textContent = '✅ Video processed successfully!';
+                            downloadSection.innerHTML = `
+                                <div style="text-align: center;">
+                                    <a href="${statusData.download_url}" class="download-btn">📥 Download Processed Video</a>
+                                    <button type="button" class="reset-btn" onclick="resetForm()">Process Another Video</button>
+                                </div>
+                            `;
+                            submitBtn.disabled = false;
+                            submitBtn.textContent = '🚀 Process Video';
+                        } else if (statusData.status === 'failed') {
+                            statusMessage.className = 'status-message error';
+                            statusMessage.textContent = '❌ Processing failed: ' + (statusData.error || 'Unknown error');
+                            submitBtn.disabled = false;
+                            submitBtn.textContent = '🚀 Process Video';
+                        } else {
+                            // Continue polling
+                            setTimeout(pollStatus, pollDelay);
+                        }
+                    } catch (error) {
+                        console.error('Status check error:', error);
+                        setTimeout(pollStatus, pollDelay);
+                    }
+                };
+                
+                pollStatus(); // Start polling
+                
+            } catch (error) {
+                statusMessage.className = 'status-message error';
+                statusMessage.textContent = '❌ Error: ' + error.message;
+                submitBtn.disabled = false;
+                submitBtn.textContent = '🚀 Process Video';
+            }
+        });
+        
+        function resetForm() {
+            form.reset();
+            selectedFile.textContent = '';
+            progressSection.classList.remove('active');
+            progressBarFill.style.width = '0%';
+            progressBarFill.textContent = '0%';
+            blurStrengthValue.textContent = '51';
+            confidenceValue.textContent = '0.15';
+            pitchShiftValue.textContent = '0';
+        }
+    </script>
+</body>
+</html>

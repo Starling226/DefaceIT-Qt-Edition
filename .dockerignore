@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Video files
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.flv
+*.wmv
+
+# Model files (will be downloaded at runtime)
+*.pt
+*.pth
+*.onnx
+*.weights
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Output files
+*_blurred.*
+
+# Git
+.git/
+.github/
+.gitignore
+
+# Android
+DefaceIT/
+
+# Releases
+releases/
+
+# Scripts
+setup.sh
+setup.bat
+run_macos.sh
+run_docker.sh
+
+# Upload/output directories
+uploads/
+outputs/
+
+# Documentation (not needed inside container)
+README.md
+
+# GUI app (not used in web version)
+defaceit_gui.py
+run.py

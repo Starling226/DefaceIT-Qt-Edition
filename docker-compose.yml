@@ -1,0 +1,21 @@
+services:
+  defaceit:
+    build: .
+    container_name: defaceit-app
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount directories for uploads and outputs
+      - ./uploads:/app/uploads
+      - ./outputs:/app/outputs
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-change-this-secret-key-in-production}
+    restart: unless-stopped
+    # Uncomment the following lines for GPU support (NVIDIA)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]

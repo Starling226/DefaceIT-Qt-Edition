@@ -73,6 +73,69 @@ The `run.py` script will automatically:
 - Fall back to system Python if needed
 - Handle tkinter detection and errors
 
+### Docker (Web Interface - Recommended)
+
+The easiest way to run DefaceIT is using Docker with a simple web interface. No need to install Python, dependencies, or deal with GUI complications.
+
+#### Prerequisites
+
+- Docker and Docker Compose installed ([Get Docker](https://docs.docker.com/get-docker/))
+
+#### Quick Start
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/pourmand1376/DefaceIT.git
+   cd DefaceIT
+   ```
+
+2. Start the application:
+   ```bash
+   docker-compose up
+   ```
+
+3. Open your browser and go to:
+   ```
+   http://localhost:8080
+   ```
+
+4. Upload your video, adjust settings, and process!
+
+The web interface provides:
+- Drag-and-drop video upload
+- All processing settings (blur strength, confidence, device, etc.)
+- Real-time progress tracking
+- Direct download of processed videos
+
+#### Using GPU (NVIDIA)
+
+To enable GPU acceleration for faster processing:
+
+1. Install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
+
+2. Uncomment the GPU section in `docker-compose.yml`:
+   ```yaml
+   deploy:
+     resources:
+       reservations:
+         devices:
+           - driver: nvidia
+             count: all
+             capabilities: [gpu]
+   ```
+
+3. Restart the application:
+   ```bash
+   docker-compose down
+   docker-compose up
+   ```
+
+#### Stopping the Application
+
+```bash
+docker-compose down
+```
+
 ## Usage
 
 1. Launch the application using the instructions above
@@ -300,6 +363,69 @@ DefaceIT یک برنامه چند پلتفرمی برای تار کردن چهر
 - در صورت وجود از محیط مجازی استفاده می‌کند
 - در صورت نیاز به Python سیستم بازمی‌گردد
 - تشخیص tkinter و خطاها را مدیریت می‌کند
+
+### Docker (رابط وب - توصیه می‌شود)
+
+ساده‌ترین راه برای اجرای DefaceIT استفاده از Docker با یک رابط وب ساده است. نیازی به نصب Python، وابستگی‌ها یا مشکلات رابط گرافیکی نیست.
+
+#### پیش‌نیازها
+
+- Docker و Docker Compose نصب شده باشد ([دریافت Docker](https://docs.docker.com/get-docker/))
+
+#### شروع سریع
+
+1. مخزن را کلون کنید:
+   ```bash
+   git clone https://github.com/pourmand1376/DefaceIT.git
+   cd DefaceIT
+   ```
+
+2. برنامه را اجرا کنید:
+   ```bash
+   docker-compose up
+   ```
+
+3. مرورگر خود را باز کنید و به آدرس زیر بروید:
+   ```
+   http://localhost:8080
+   ```
+
+4. ویدیوی خود را آپلود کنید، تنظیمات را تنظیم کنید و پردازش کنید!
+
+رابط وب شامل موارد زیر است:
+- آپلود ویدیو با کشیدن و رها کردن
+- تمام تنظیمات پردازش (قدرت تار کردن، اعتماد، دستگاه و غیره)
+- پیگیری پیشرفت در زمان واقعی
+- دانلود مستقیم ویدیوهای پردازش شده
+
+#### استفاده از GPU (NVIDIA)
+
+برای فعال‌سازی شتاب GPU برای پردازش سریع‌تر:
+
+1. [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) را نصب کنید
+
+2. بخش GPU را در `docker-compose.yml` از حالت توضیح خارج کنید:
+   ```yaml
+   deploy:
+     resources:
+       reservations:
+         devices:
+           - driver: nvidia
+             count: all
+             capabilities: [gpu]
+   ```
+
+3. برنامه را مجدداً راه‌اندازی کنید:
+   ```bash
+   docker-compose down
+   docker-compose up
+   ```
+
+#### متوقف کردن برنامه
+
+```bash
+docker-compose down
+```
 
 ## استفاده
 
