@@ -41,10 +41,17 @@ class VideoBlurService(
     private var isCancelled = false
     private val faceDetector = FaceDetector(confidence)
     private val videoProcessor = VideoProcessor(blurStrength, blurType)
+    private val notificationHelper = NotificationHelper(context)
     private val TAG = "VideoBlurService"
 
     fun cancel() {
         isCancelled = true
+        notificationHelper.cancel()
+    }
+
+    private fun updateProgress(progress: Float, status: String, onProgress: (Float, String) -> Unit) {
+        onProgress(progress, status)
+        notificationHelper.showProgress(progress.toInt(), status)
     }
 
     suspend fun processVideo(
@@ -53,7 +60,7 @@ class VideoBlurService(
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             isCancelled = false
-            onProgress(0f, "Initializing...")
+            updateProgress(0f, "Initializing...", onProgress)
 
             val retriever = MediaMetadataRetriever()
             retriever.setDataSource(context, inputUri)
@@ -72,7 +79,7 @@ class VideoBlurService(
             val totalFrames = if (duration > 0) ((duration / 1000.0) * frameRate.toDouble()).toInt() else 100
             var processedFrames = 0
 
-            onProgress(5f, "Processing frames...")
+            updateProgress(5f, "Processing frames...", onProgress)
 
             val audioFile = if (pitchShift != 0.0f) {
                 Log.d(TAG, "Using Sonic with pitch shift: $pitchShift semitones")
@@ -285,7 +292,7 @@ class VideoBlurService(
 
                         if (processedFrames % 5 == 0) {
                             val progress = 5f + (processedFrames.toFloat() / totalFrames.coerceAtLeast(1) * 90f)
-                            onProgress(progress.coerceAtMost(95f), "Processed $processedFrames frames")
+                            updateProgress(progress.coerceAtMost(95f), "Processed $processedFrames frames", onProgress)
                         }
                     }
                     currentTimeUs += frameTimeUs
@@ -383,31 +390,56 @@ class VideoBlurService(
                 retriever.release()
                 audioFile?.delete()
                 
-                if (tempOutputFile.exists() && tempOutputFile.length() > 0) {
+                updateProgress(95f, "Saving video...", onProgress)
+                
+                if (!tempOutputFile.exists() || tempOutputFile.length() == 0L) {
+                    Log.e(TAG, "Temp output file does not exist or is empty!")
+                    tempOutputFile.delete()
+                    notificationHelper.showError("Video encoding failed - output file is empty")
+                    return@withContext Result.failure(RuntimeException("Video encoding failed - output file is empty"))
+                }
+                
+                try {
+                    updateProgress(96f, "Copying video file...", onProgress)
+                    tempOutputFile.copyTo(outputFile, overwrite = true)
+                    tempOutputFile.delete()
+                    Log.d(TAG, "Output file created: ${outputFile.length()} bytes")
+                    
+                    if (!outputFile.exists() || outputFile.length() == 0L) {
+                        Log.e(TAG, "Output file is empty after copy!")
+                        notificationHelper.showError("Failed to save video - file is empty")
+                        return@withContext Result.failure(RuntimeException("Failed to save video - file is empty"))
+                    }
+                    
+                    updateProgress(97f, "Validating video...", onProgress)
+                    val testRetriever = MediaMetadataRetriever()
                     try {
-                        tempOutputFile.copyTo(outputFile, overwrite = true)
-                        tempOutputFile.delete()
-                        Log.d(TAG, "Output file created: ${outputFile.length()} bytes")
-                        
-                        val testRetriever = MediaMetadataRetriever()
                         testRetriever.setDataSource(outputFile.absolutePath)
                         val testDuration = testRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                         val testWidth = testRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
-                        testRetriever.release()
                         Log.d(TAG, "Video metadata - Duration: $testDuration ms, Width: $testWidth")
-                        
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            val values = ContentValues().apply {
-                                put(MediaStore.Video.Media.RELATIVE_PATH, android.os.Environment.DIRECTORY_MOVIES)
-                                put(MediaStore.Video.Media.DISPLAY_NAME, outputFile.name)
-                                put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-                                put(MediaStore.Video.Media.IS_PENDING, 0)
-                            }
-                            val uri = context.contentResolver.insert(
-                                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                                values
-                            )
-                            if (uri != null) {
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to validate video: ${e.message}", e)
+                        testRetriever.release()
+                        notificationHelper.showError("Video file is corrupted: ${e.message}")
+                        return@withContext Result.failure(RuntimeException("Video file is corrupted: ${e.message}"))
+                    }
+                    testRetriever.release()
+                    
+                    updateProgress(98f, "Registering in gallery...", onProgress)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        val values = ContentValues().apply {
+                            put(MediaStore.Video.Media.RELATIVE_PATH, android.os.Environment.DIRECTORY_MOVIES)
+                            put(MediaStore.Video.Media.DISPLAY_NAME, outputFile.name)
+                            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                            put(MediaStore.Video.Media.IS_PENDING, 1)
+                        }
+                        val uri = context.contentResolver.insert(
+                            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                            values
+                        )
+                        if (uri != null) {
+                            try {
                                 context.contentResolver.openOutputStream(uri)?.use { os ->
                                     outputFile.inputStream().use { it.copyTo(os) }
                                 }
@@ -415,28 +447,36 @@ class VideoBlurService(
                                     put(MediaStore.Video.Media.IS_PENDING, 0)
                                 }
                                 context.contentResolver.update(uri, finalValues, null, null)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to write to MediaStore: ${e.message}", e)
+                                // Continue - file is still saved in external files dir
                             }
-                        } else {
+                        }
+                    } else {
+                        try {
                             val values = ContentValues().apply {
                                 put(MediaStore.Video.Media.DATA, outputFile.absolutePath)
                                 put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
                             }
                             context.contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to copy or register file: ${e.message}", e)
-                        if (tempOutputFile.exists()) {
-                            tempOutputFile.copyTo(outputFile, overwrite = true)
-                            tempOutputFile.delete()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to register in MediaStore: ${e.message}", e)
+                            // Continue - file is still saved in external files dir
                         }
                     }
-                } else {
-                    Log.e(TAG, "Temp output file does not exist or is empty!")
+                    
+                    updateProgress(100f, "Complete!", onProgress)
+                    notificationHelper.showComplete("Video processing completed successfully")
+                    Result.success(outputFile.absolutePath)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to save video: ${e.message}", e)
+                    notificationHelper.showError("Failed to save video: ${e.message}")
+                    tempOutputFile.delete()
+                    if (outputFile.exists()) {
+                        outputFile.delete()
+                    }
+                    Result.failure(e)
                 }
-
-                onProgress(100f, "Complete!")
-                onProgress(100f, "Complete!")
-                Result.success(outputFile.absolutePath)
             } catch (e: Exception) {
                 try {
                     encoder.stop()
@@ -454,9 +494,11 @@ class VideoBlurService(
                 retriever.release()
                 audioFile?.delete()
                 tempOutputFile.delete()
+                notificationHelper.showError("Processing failed: ${e.message}")
                 Result.failure(e)
             }
         } catch (e: Exception) {
+            notificationHelper.showError("Processing failed: ${e.message}")
             Result.failure(e)
         } finally {
             faceDetector.close()

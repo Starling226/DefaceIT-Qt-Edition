@@ -2,7 +2,9 @@ package com.shin.defaceit
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -20,6 +22,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.shin.defaceit.ui.theme.DefaceITTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -68,6 +71,16 @@ fun MainScreen() {
         inputVideoUri = uri
     }
     
+    var notificationPermissionGranted by remember { mutableStateOf(
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || 
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    ) }
+    
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        notificationPermissionGranted = isGranted
+    }
 
     
     Column(
@@ -115,6 +128,13 @@ fun MainScreen() {
             onStart = {
                 if (inputVideoUri == null) {
                     statusText = texts["error_no_input"]
+                    return@ProcessingSection
+                }
+                
+                // Request notification permission if needed (Android 13+)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && 
+                    !notificationPermissionGranted) {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     return@ProcessingSection
                 }
                 
