@@ -54,6 +54,25 @@ class VideoBlurService(
         notificationHelper.showProgress(progress.toInt(), status)
     }
 
+    private fun calculateTargetDimensions(sourceWidth: Int, sourceHeight: Int, maxDimension: Int = 720): Pair<Int, Int> {
+        val aspectRatio = sourceWidth.toFloat() / sourceHeight.toFloat()
+        val targetWidth: Int
+        val targetHeight: Int
+        
+        if (sourceWidth >= sourceHeight) {
+            // Landscape or square
+            targetWidth = minOf(sourceWidth, maxDimension)
+            targetHeight = (targetWidth / aspectRatio).toInt()
+        } else {
+            // Portrait
+            targetHeight = minOf(sourceHeight, maxDimension)
+            targetWidth = (targetHeight * aspectRatio).toInt()
+        }
+        
+        // Ensure dimensions are even (required for YUV420)
+        return Pair(targetWidth and 0xFFFE, targetHeight and 0xFFFE)
+    }
+
     suspend fun processVideo(
         inputUri: Uri,
         onProgress: (Float, String) -> Unit
@@ -98,11 +117,16 @@ class VideoBlurService(
 
             muxer.setOrientationHint(0) 
             
-            val (finalWidth, finalHeight) = if (rotation == 90 || rotation == 270) {
+            // Calculate dimensions after rotation
+            val (rotatedWidth, rotatedHeight) = if (rotation == 90 || rotation == 270) {
                 height to width
             } else {
                 width to height
             }
+            
+            // Resize to max 720p while preserving aspect ratio
+            val (finalWidth, finalHeight) = calculateTargetDimensions(rotatedWidth, rotatedHeight, 720)
+            Log.d(TAG, "Original: ${width}x${height}, After rotation: ${rotatedWidth}x${rotatedHeight}, Target: ${finalWidth}x${finalHeight}")
 
             val videoFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, finalWidth, finalHeight)
             videoFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar)
@@ -749,15 +773,48 @@ class VideoBlurService(
     }
 
     private fun bitmapToYuv420(bitmap: Bitmap, width: Int, height: Int): ByteArray {
-        // Ensure bitmap dimensions match expected dimensions
         val bitmapWidth = bitmap.width
         val bitmapHeight = bitmap.height
         
-        val sourceBitmap = if (bitmapWidth != width || bitmapHeight != height) {
-            // Scale to match expected dimensions
-            Bitmap.createScaledBitmap(bitmap, width, height, true)
+        val sourceBitmap: Bitmap
+        val needsCleanup: Boolean
+        
+        if (bitmapWidth == width && bitmapHeight == height) {
+            sourceBitmap = bitmap
+            needsCleanup = false
         } else {
-            bitmap
+            // Scale while preserving aspect ratio (letterbox/pillarbox)
+            val aspectRatio = bitmapWidth.toFloat() / bitmapHeight.toFloat()
+            val targetAspectRatio = width.toFloat() / height.toFloat()
+            
+            val scaledWidth: Int
+            val scaledHeight: Int
+            var offsetX = 0
+            var offsetY = 0
+            
+            if (aspectRatio > targetAspectRatio) {
+                // Source is wider - fit to width, letterbox top/bottom
+                scaledWidth = width
+                scaledHeight = (width / aspectRatio).toInt()
+                offsetY = (height - scaledHeight) / 2
+            } else {
+                // Source is taller - fit to height, pillarbox left/right
+                scaledHeight = height
+                scaledWidth = (height * aspectRatio).toInt()
+                offsetX = (width - scaledWidth) / 2
+            }
+            
+            // Scale bitmap
+            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, scaledWidth, scaledHeight, true)
+            
+            // Create target bitmap with black background
+            sourceBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(sourceBitmap)
+            canvas.drawARGB(255, 0, 0, 0) // Black background
+            canvas.drawBitmap(scaledBitmap, offsetX.toFloat(), offsetY.toFloat(), null)
+            
+            scaledBitmap.recycle()
+            needsCleanup = true
         }
         
         val yuv = ByteArray(width * height * 3 / 2)
@@ -765,7 +822,7 @@ class VideoBlurService(
         sourceBitmap.getPixels(argb, 0, width, 0, 0, width, height)
         
         // Clean up scaled bitmap if we created one
-        if (sourceBitmap != bitmap) {
+        if (needsCleanup) {
             sourceBitmap.recycle()
         }
 
