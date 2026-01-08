@@ -144,7 +144,6 @@ macOS version has not been tested yet
 - **Donate (Crypto):https://nowpayments.io/donation/shin
 - **Donate (Card):https://buymeacoffee.com/hey_itsmyturn
 
-**Note:** Translation was permormed by Grok
 
 
 # DefaceIT Qt-Edition (فارسی)
@@ -202,13 +201,17 @@ https://github.com/BtbN/FFmpeg-Builds/releases
 ### نصب پایتون:
 فایل نصبی Python 3.11.6 را متناسب با سیستم خود از اینجا دانلود کنید:
 https://www.python.org/downloads/windows/
+
 **توجه:** (نسخه‌های جدیدتر پایتون مشکلات سازگاری دارند)
 
  نصب‌کننده پایتون به‌طور خودکار مسیر پایتون را به متغیرهای محیطی (Environment Variables) اضافه نمی‌کند. باید به‌صورت دستی اضافه کنید.
  
 مسیر نصب پایتون معمولاً در این آدرس است:
+
 C:\Users\xxx\AppData\Local\Programs\Python\Python311
+
 ۱. در نوار جستجوی ویندوز عبارت SystemPropertiesAdvanced.exe را تایپ کنید
+
 ۲. در بخش Environment Variables روی New کلیک کنید و مسیرهای زیر را اضافه کنید:
 
 C:\Users\xxx\AppData\Local\Programs\Python\Python311
@@ -217,19 +220,23 @@ C:\Users\xxx\AppData\Local\Programs\Python\Python311\Scripts
 
 C:\ffmpeg\bin
 (به جای xxx نام کاربری خود را قرار دهید)
+
 ۳. هر سه مسیر را به بالای لیست منتقل کنید (Move Up)
+
 ۴. دوبار روی OK کلیک کنید
                                                                                                                                                                                              
 - اجرای نصب:
+
 ۱. به پوشه DefaceIT بروید و یکی از روش‌های زیر را انجام دهید:
    ```bash
       cmd
       cd DefaceIT
    ```
-دوبار کلیک روی فایل setup.bat
-یا
+یا دوبار کلیک روی فایل setup.bat
+
 ۱. Command Prompt یا PowerShell را باز کنید
 ۲. به پوشه DefaceIT بروید:
+
 ۳. اسکریپت نصب را اجرا کنید:
    ```bash
    setup.bat
@@ -242,6 +249,7 @@ C:\ffmpeg\bin
 برای فعال‌سازی شتاب‌دهی GPU و پردازش سریع‌تر:
 
 درایور NVIDIA مناسب کارت گرافیک خود را نصب کنید:
+
 https://www.nvidia.com/en-us/drivers/
 
 ### مشکلات و رفع اشکال
@@ -267,6 +275,7 @@ https://www.nvidia.com/en-us/drivers/
 
 ## اعتبارات
 **توسعه‌دهنده** (نسخه Qt): Starling226
+
 **توسعه‌دهنده** (نسخه Tk): Shin
 
 - ** توییتر (X):@hey_itsmyturn
