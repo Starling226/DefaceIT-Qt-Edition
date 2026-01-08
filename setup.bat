@@ -56,5 +56,5 @@ echo ==========================================
 echo.
 echo Starting DefaceIT...
 echo.
-python run.py
+python run_qt.py
 pause

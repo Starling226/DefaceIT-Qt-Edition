@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import cv2
 import numpy as np
 from ultralytics import YOLO
@@ -8,50 +6,66 @@ from typing import List, Tuple, Optional
 import time
 import subprocess
 import os
+import shutil
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QProcess, QProcessEnvironment
 
-try:
-    try:
-        from mediapipe.python.solutions import face_detection as mp_face_detection
-        MEDIAPIPE_AVAILABLE = True
-        MEDIAPIPE_NEW_API = True
-    except ImportError:
-        import mediapipe as mp
-        if hasattr(mp, 'solutions'):
-            MEDIAPIPE_AVAILABLE = True
-            MEDIAPIPE_NEW_API = False
-        else:
-            MEDIAPIPE_AVAILABLE = False
-            MEDIAPIPE_NEW_API = False
-except ImportError:
-    MEDIAPIPE_AVAILABLE = False
-    MEDIAPIPE_NEW_API = False
+class VideoBlurrer(QObject):
+    """Fully asynchronous video blurring worker using QProcess signals"""
 
+    progress = pyqtSignal(str)      # status messages
+    finished = pyqtSignal(int)      # exit code (0 = success)
+    error = pyqtSignal(str)         # error messages
 
-class VideoBlurrer:
-    
     def __init__(
         self,
         face_model_path: Optional[str] = None,
         license_plate_model_path: Optional[str] = None,
-        device: str = "auto",
+        device: str = "cpu",
         blur_strength: int = 51,
         blur_type: str = "gaussian",
         confidence: float = 0.15,
         detect_faces: bool = True,
         detect_license_plates: bool = True,
         progress_callback=None,
-        pitch_shift: float = 0.0
+        pitch_shift: float = 0.0,
+        reencode_to_h264: bool = True,
+        input_file: str = "",
+        output_file: str = "",
+        ffmpeg_path: str = "",
+        crf_value: int = 16
     ):
+        super().__init__()
         self.blur_strength = blur_strength if blur_strength % 2 == 1 else blur_strength + 1
         self.blur_type = blur_type
         self.confidence = confidence
         self.detect_faces = detect_faces
         self.detect_license_plates = detect_license_plates
-        self.progress_callback = progress_callback
         self.pitch_shift = pitch_shift
+        self.reencode_to_h264 = reencode_to_h264
         self.face_padding = 0.2
         self.is_cancelled = False
-        
+        self.input_path = input_file
+        self.output_path = output_file
+        self.ffmpeg_path = ffmpeg_path
+        self.crf_value = crf_value
+        self.progress_callback = progress_callback  # optional direct callback
+
+        # Async state
+        self.current_step = "init"
+        self.temp_files = []  # cleanup list
+        self.cap = None
+        self.out = None
+        self.process = None  # current QProcess
+        self.temp_audio = None
+        self.shifted_audio = None
+        self.reencoded_video = None
+
+        self.frame_queue = []           # list of bytes
+        self._writing_started = False   # flag to start writer only once
+        self._write_timer_active = False
+
+        # Device auto-detection
+        '''
         if device == "auto":
             import torch
             if torch.cuda.is_available():
@@ -60,46 +74,59 @@ class VideoBlurrer:
                 device = "mps"
             else:
                 device = "cpu"
-        
+        '''
+
         self.device = device
+
+        # Load models
         self.models = []
-        self.face_detector = None
-        
-        if detect_faces:
-            if MEDIAPIPE_AVAILABLE:
-                if MEDIAPIPE_NEW_API:
-                    self.face_detector = mp_face_detection.FaceDetection(
-                        model_selection=1,
-                        min_detection_confidence=self.confidence
-                    )
-                else:
-                    self.mp_face_detection = mp.solutions.face_detection
-                    self.face_detector = self.mp_face_detection.FaceDetection(
-                        model_selection=1,
-                        min_detection_confidence=self.confidence
-                    )
-            else:
-                if face_model_path:
-                    face_model = YOLO(face_model_path)
-                else:
-                    face_model = YOLO("yolo11n.pt")
-                face_model.to(device)
-                self.models.append(("face", face_model))
-        
-        if detect_license_plates:
-            if license_plate_model_path:
-                lp_model = YOLO(license_plate_model_path)
-            else:
-                lp_model = YOLO("yolo11n.pt")
-            lp_model.to(device)
+        if self.detect_faces:
+            face_model = YOLO(face_model_path or "yolo11n.pt")
+            face_model.to(self.device)
+            self.models.append(("face", face_model))
+        if self.detect_license_plates:
+            lp_model = YOLO(license_plate_model_path or "yolo11n.pt")
+            lp_model.to(self.device)
             self.models.append(("license_plate", lp_model))
-    
-    def cancel(self):
-        self.is_cancelled = True
-    
+
+    def start(self):
+        """Public method to start the async processing"""
+        if self.is_cancelled:
+            self.finished.emit(0)
+            return
+        self.current_step = "open_video"
+        self._open_video()
+
+    def _open_video(self):
+        self.progress.emit("Opening video...")
+        if self.progress_callback:
+            self.progress_callback(0, 0, "Opening video...")
+
+        try:
+            self.cap = cv2.VideoCapture(self.input_path)
+            if not self.cap.isOpened():
+                raise Exception(f"Could not open video: {self.input_path}")
+
+            fps = int(self.cap.get(cv2.CAP_PROP_FPS))
+            width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+            self.progress.emit(f"Processing {self.total_frames} frames...")
+            if self.progress_callback:
+                self.progress_callback(0, 0, f"Processing {self.total_frames} frames...")
+
+
+            self.current_step = "process_frames"
+            self._start_frame_processing_pipe(fps, width, height)
+
+        except Exception as e:
+            self.error.emit(f"Open video error: {str(e)}")
+            self.finished.emit(1)
+
     def blur_region(self, frame: np.ndarray, bbox: Tuple[int, int, int, int], padding: float = 0.0) -> np.ndarray:
         x1, y1, x2, y2 = bbox
-        
+
         if padding > 0:
             width = x2 - x1
             height = y2 - y1
@@ -109,15 +136,15 @@ class VideoBlurrer:
             y1 = max(0, y1 - pad_y)
             x2 = min(frame.shape[1], x2 + pad_x)
             y2 = min(frame.shape[0], y2 + pad_y)
-        
+
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
-        
+
         if x2 <= x1 or y2 <= y1:
             return frame
-        
+
         roi = frame[y1:y2, x1:x2]
-        
+
         if self.blur_type == "gaussian":
             blurred_roi = cv2.GaussianBlur(roi, (self.blur_strength, self.blur_strength), 0)
         elif self.blur_type == "pixelate":
@@ -126,250 +153,393 @@ class VideoBlurrer:
             blurred_roi = cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
         else:
             blurred_roi = cv2.GaussianBlur(roi, (self.blur_strength, self.blur_strength), 0)
-        
+
         frame[y1:y2, x1:x2] = blurred_roi
         return frame
-    
+
     def process_frame(self, frame: np.ndarray) -> np.ndarray:
-        if self.detect_faces and self.face_detector is not None:
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = self.face_detector.process(rgb_frame)
-            
-            if results.detections:
-                h, w = frame.shape[:2]
-                for detection in results.detections:
-                    bbox = detection.location_data.relative_bounding_box
-                    x1 = int(bbox.xmin * w)
-                    y1 = int(bbox.ymin * h)
-                    x2 = int((bbox.xmin + bbox.width) * w)
-                    y2 = int((bbox.ymin + bbox.height) * h)
-                    
-                    x1 = max(0, x1)
-                    y1 = max(0, y1)
-                    x2 = min(w, x2)
-                    y2 = min(h, y2)
-                    
-                    if x2 > x1 and y2 > y1:
-                        self.blur_region(frame, (x1, y1, x2, y2), padding=self.face_padding)
-        
         for model_type, model in self.models:
             results = model(frame, conf=self.confidence, iou=0.5, verbose=False)
-            
+
             for result in results:
                 boxes = result.boxes
                 if len(boxes) == 0:
                     continue
-                    
+
                 for box in boxes:
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
                     cls = int(box.cls[0].cpu().numpy())
-                    
+
                     if model_type == "face":
-                        self.blur_region(frame, (x1, y1, x2, y2), padding=self.face_padding)
-                    
+                        if cls == 0:
+                            height = y2 - y1
+                            width = x2 - x1
+                            face_y1 = y1
+                            face_y2 = y1 + int(height * 0.5)
+                            face_x1 = max(0, x1 - int(width * 0.1))
+                            face_x2 = min(frame.shape[1], x2 + int(width * 0.1))
+                            self.blur_region(frame, (face_x1, face_y1, face_x2, face_y2), padding=self.face_padding)
+                        else:
+                            self.blur_region(frame, (x1, y1, x2, y2), padding=self.face_padding)
+
                     elif model_type == "license_plate":
                         self.blur_region(frame, (x1, y1, x2, y2), padding=0.1)
-        
+
         return frame
-    
+
+    def _start_frame_processing_pipe(self, fps, width, height):
+        '''
+        if self.device == "cpu" or self.device == "mps":
+            cmd = [
+                self.ffmpeg_path,
+                '-y',
+                '-f', 'rawvideo',
+                '-vcodec', 'rawvideo',
+                '-pix_fmt', 'bgr24',
+                '-s', f"{width}x{height}",
+                '-r', str(fps),
+                '-i', '-',
+                '-c:v', 'libx264',
+                '-preset', 'medium',
+                '-crf', str(self.crf_value),
+                '-threads', '0',
+                '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart',
+                self.output_path
+            ]
+
+        else: # GPU
+            self.crf_value = min(self.crf_value + 3, 28)
+            cmd = [
+                self.ffmpeg_path,
+                '-y',
+                '-f', 'rawvideo',
+                '-vcodec', 'rawvideo',
+                '-pix_fmt', 'bgr24',
+                '-s', f"{width}x{height}",
+                '-r', str(fps),
+                '-i', '-',
+                '-c:v', 'h264_nvenc',             # NVIDIA hardware encoder
+                '-preset', 'p7',                  # p7 = highest quality (slowest), p1 = fastest
+                '-rc', 'vbr',                     # Variable bitrate (recommended for quality)
+                '-cq', str(self.crf_value),       # Constant quality (like CRF, 19–23 is excellent)
+                '-b:v', '3000k',                     # Target bitrate (5 Mbps) - adjust for resolution
+                '-maxrate', '6000k',                # Max bitrate (optional, prevents spikes)
+                '-bufsize', '12000k',                # Buffer size (match maxrate)
+                '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart',
+                '-threads', '0',                  # NVENC ignores threads anyway
+                self.output_path
+            ]
+        '''
+        cmd = [
+            self.ffmpeg_path,
+            '-y',
+            '-f', 'rawvideo',
+            '-vcodec', 'rawvideo',
+            '-pix_fmt', 'bgr24',
+            '-s', f"{width}x{height}",
+            '-r', str(fps),
+            '-i', '-',
+            '-c:v', 'libx264',
+            '-preset', 'medium',
+            '-crf', str(self.crf_value),
+            '-threads', '0',
+            '-pix_fmt', 'yuv420p',
+            '-movflags', '+faststart',
+            self.output_path
+        ]
+
+        self.process = QProcess()
+        self.process.setProcessChannelMode(QProcess.MergedChannels)
+        self.process.readyReadStandardOutput.connect(self._handle_output)
+        self.process.finished.connect(self._on_encoding_finished)
+        self.process.errorOccurred.connect(self._on_process_error)
+
+        self.process.start(cmd[0], cmd[1:])
+
+        self.frame_count = 0
+        self.start_time = time.time()
+        QTimer.singleShot(0, self._process_next_frame)
+
+    def _process_next_frame(self):
+        if self.is_cancelled:
+            self._cleanup()
+            self.finished.emit(0)
+            return
+
+        ret, frame = self.cap.read()
+        if not ret:
+            self.cap.release()
+#            self.process.close()
+            self.process.closeWriteChannel()  # Signals EOF to FFmpeg
+            self.progress.emit("All frames processed. Waiting for encoding...")
+            if self.progress_callback:
+                self.progress_callback(0, 0, "All frames processed. Waiting for encoding...")
+
+            return
+
+        processed_frame = self.process_frame(frame.copy())
+
+        # Step 1-3: Collect frames in queue (add to buffer instead of direct write)
+        self.frame_queue.append(processed_frame.tobytes())  # ← Add to queue
+
+        self.frame_count += 1
+        if self.frame_count % 5 == 0:
+            elapsed = time.time() - self.start_time
+            fps_actual = self.frame_count / elapsed if elapsed > 0 else 0
+            progress = (self.frame_count / self.total_frames) * 100 if self.total_frames > 0 else 0
+            self.progress.emit(f"Processing frame {self.frame_count}/{self.total_frames} ({fps_actual:.1f} FPS)")
+            if self.progress_callback:
+                self.progress_callback(progress, fps_actual, f"Processing frame {self.frame_count}/{self.total_frames}")        
+
+        # Step 4: Start writing queued frames in batches (only once, on first call)
+#        if not hasattr(self, '_writing_started') or not self._writing_started:
+        if not self._write_timer_active:
+            self._writing_started = True
+            QTimer.singleShot(20, self._write_batch)  # Start batch writer
+
+        # Schedule next frame read
+        QTimer.singleShot(0, self._process_next_frame)
+
+
+    def _write_batch(self):
+        if self.is_cancelled or self.process.state() != QProcess.Running:
+            self._write_timer_active = False
+            return
+
+        batch_size = 5  # Write 5 frames at a time (adjust 5-20)
+        batch = self.frame_queue[:batch_size]
+        self.frame_queue = self.frame_queue[batch_size:]
+
+        for frame_bytes in batch:
+            try:
+                self.process.write(frame_bytes)
+            except Exception as e:
+                self.error.emit(f"Pipe write error: {str(e)}")
+                self.finished.emit(1)
+                return
+
+        # If more frames, schedule next batch
+        if self.frame_queue:
+            QTimer.singleShot(50, self._write_batch)
+        else:
+            self._write_timer_active = False
+
+    def _on_encoding_finished(self, exit_code, exit_status):
+        if self.is_cancelled:
+            self._cleanup()
+            self.finished.emit(0)
+            return
+
+        if exit_code != 0:
+            self.error.emit(f"Encoding failed (code {exit_code})")
+            self.finished.emit(exit_code)
+            return
+
+        self.progress.emit("Encoding complete. Merging audio...")
+        if self.progress_callback:
+            self.progress_callback(0, 0, "Encoding complete. Merging audio...")
+
+        self.current_step = "merge_audio"
+        self._merge_audio_async()
+
     def _check_ffmpeg(self) -> bool:
+        """Non-blocking check (but we can call it sync since it's fast)"""
         try:
-            subprocess.run(['ffmpeg', '-version'], 
-                         stdout=subprocess.DEVNULL, 
-                         stderr=subprocess.DEVNULL,
-                         check=True)
-            return True
-        except (subprocess.CalledProcessError, FileNotFoundError):
+            result = subprocess.run([self.ffmpeg_path, "-version"], capture_output=True, text=True, check=False)
+            return result.returncode == 0
+        except:
             return False
-    
+
+    def _merge_audio_async(self):
+        temp_audio = str(Path(self.output_path).with_suffix('.temp_audio.wav'))
+        self.temp_files.append(temp_audio)
+
+        extract_cmd = [
+            self.ffmpeg_path,
+            '-i', self.input_path,
+            '-vn', '-acodec', 'pcm_s16le',
+            '-y', temp_audio
+        ]
+
+        self.process = QProcess()
+        self.process.finished.connect(lambda code, status: self._on_audio_extract_finished(code, temp_audio))
+        self.process.errorOccurred.connect(self._on_process_error)
+        self.process.readyReadStandardOutput.connect(self._handle_output)
+
+        self.process.start(extract_cmd[0], extract_cmd[1:])
+
+    def _on_audio_extract_finished(self, exit_code, temp_audio):
+        if self.is_cancelled:
+            self._cleanup()
+            self.finished.emit(0)
+            return
+
+        if exit_code != 0:
+            self.error.emit(f"Audio extraction failed (code {exit_code})")
+            self.finished.emit(exit_code)
+            return
+
+        if abs(self.pitch_shift) > 0.01:
+            shifted_audio = str(Path(temp_audio).with_suffix('.shifted.wav'))
+            self.temp_files.append(shifted_audio)
+            self.current_step = "shift_audio"
+            self._shift_audio_async(temp_audio, shifted_audio)
+        else:
+            self.current_step = "final_merge"
+            self._final_merge(temp_audio, temp_audio)
+
     def _shift_audio_pitch(self, input_audio_path: str, output_audio_path: str, semitones: float) -> bool:
+        """Synchronous fallback (fast, called from thread)"""
         try:
-            import librosa
-            import soundfile as sf
-            
             y, sr = librosa.load(input_audio_path, sr=None)
             y_shifted = librosa.effects.pitch_shift(y, sr=sr, n_steps=semitones)
             sf.write(output_audio_path, y_shifted, sr)
             return True
-        except ImportError:
-            return self._shift_audio_pitch_ffmpeg(input_audio_path, output_audio_path, semitones)
         except Exception as e:
-            print(f"Error shifting pitch: {e}")
+            print(f"Librosa shift error: {e}")
             return False
-    
-    def _shift_audio_pitch_ffmpeg(self, input_audio_path: str, output_audio_path: str, semitones: float) -> bool:
-        if not self._check_ffmpeg():
-            return False
-        
-        try:
-            pitch_ratio = 2 ** (semitones / 12.0)
-            
-            cmd = [
-                'ffmpeg',
-                '-i', input_audio_path,
-                '-af', f'rubberband=pitch={pitch_ratio}',
-                '-y',
-                output_audio_path
-            ]
-            
-            result = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            
-            if result.returncode != 0:
-                cmd = [
-                    'ffmpeg',
-                    '-i', input_audio_path,
-                    '-af', f'asetrate={44100 * pitch_ratio},aresample=44100',
-                    '-y',
-                    output_audio_path
-                ]
-                result = subprocess.run(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True
-                )
-            
-            return result.returncode == 0
-        except Exception:
-            return False
-    
-    def _merge_audio(self, input_video: str, output_video: str, pitch_shift: float = 0.0) -> Optional[str]:
-        if not self._check_ffmpeg():
-            return None
-        
-        output_path = Path(output_video)
-        temp_audio = str(output_path.parent / f"{output_path.stem}_temp_audio.wav")
-        final_output = str(output_path.parent / f"{output_path.stem}_with_audio{output_path.suffix}")
-        
-        try:
-            extract_cmd = [
-                'ffmpeg',
-                '-i', input_video,
-                '-vn', '-acodec', 'pcm_s16le',
-                '-y',
-                temp_audio
-            ]
-            
-            result = subprocess.run(
-                extract_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            
-            if result.returncode != 0:
-                os.replace(output_video, final_output)
-                return final_output
-            
-            if abs(pitch_shift) > 0.01:
-                shifted_audio = str(output_path.parent / f"{output_path.stem}_shifted_audio.wav")
-                if self._shift_audio_pitch(temp_audio, shifted_audio, pitch_shift):
-                    temp_audio = shifted_audio
-                if os.path.exists(str(output_path.parent / f"{output_path.stem}_temp_audio.wav")):
-                    os.remove(str(output_path.parent / f"{output_path.stem}_temp_audio.wav"))
-            
-            merge_cmd = [
-                'ffmpeg',
-                '-i', output_video,
-                '-i', temp_audio,
-                '-c:v', 'copy',
-                '-c:a', 'aac',
-                '-map', '0:v:0',
-                '-map', '1:a:0',
-                '-shortest',
-                '-y',
-                final_output
-            ]
-            
-            result = subprocess.run(
-                merge_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            
-            if os.path.exists(temp_audio):
-                os.remove(temp_audio)
-            
-            if result.returncode == 0:
-                os.replace(final_output, output_video)
-                return output_video
+
+    def _shift_audio_async(self, input_audio, output_audio):
+        pitch_ratio = 2 ** (self.pitch_shift / 12.0)
+
+        cmd = [
+            self.ffmpeg_path,
+            '-i', input_audio,
+            '-af', f'rubberband=pitch={pitch_ratio}',
+            '-y', output_audio
+        ]
+
+        self.process = QProcess()
+        self.process.finished.connect(lambda code, status: self._on_shift_finished(code, output_audio))
+        self.process.errorOccurred.connect(self._on_process_error)
+        self.process.readyReadStandardOutput.connect(self._handle_output)
+
+        self.process.start(cmd[0], cmd[1:])
+
+    def _on_shift_finished(self, exit_code, output_audio):
+        if self.is_cancelled:
+            self._cleanup()
+            self.finished.emit(0)
+            return
+
+        if exit_code != 0:
+            # Fallback to asetrate (sync fallback)
+            if self._shift_audio_pitch(self.input_audio, output_audio, self.pitch_shift):
+                self.current_step = "final_merge"
+                self._final_merge(output_audio, output_audio)
             else:
-                return None
-                
-        except Exception as e:
-            print(f"Error merging audio: {e}")
-            return None
-    
-    def process_video(self, input_path: str, output_path: str) -> Tuple[bool, str]:
-        self.is_cancelled = False
-        
+                self.error.emit("Audio pitch shift failed")
+                self.finished.emit(1)
+        else:
+            self.current_step = "final_merge"
+            self._final_merge(output_audio, output_audio)
+
+    def _final_merge(self, audio_file, temp_audio):
+        final_output = str(Path(self.output_path).with_suffix('.final.mp4'))
+        self.temp_files.append(final_output)
+
+        merge_cmd = [
+            self.ffmpeg_path,
+            '-i', self.output_path,
+            '-i', audio_file,
+            '-c:v', 'copy',
+            '-c:a', 'aac',
+            '-map', '0:v:0',
+            '-map', '1:a:0',
+            '-shortest',
+            '-y',
+            final_output
+        ]
+
+        self.process = QProcess()
+        self.process.finished.connect(lambda code, status: self._on_final_merge_finished(code, final_output, temp_audio))
+        self.process.errorOccurred.connect(self._on_process_error)
+        self.process.readyReadStandardOutput.connect(self._handle_output)
+
+        self.process.start(merge_cmd[0], merge_cmd[1:])
+
+    def _on_final_merge_finished(self, exit_code, final_output, temp_audio):
+        if self.is_cancelled:
+            self._cleanup()
+            self.finished.emit(0)
+            return
+
+        if exit_code == 0:
+            os.replace(final_output, self.output_path)
+            self.progress.emit("Processing complete!")
+            if self.progress_callback:
+                self.progress_callback(0, 0, "Processing complete!")
+
+            self.finished.emit(0)
+        else:
+            self.error.emit(f"Audio merge failed (code {exit_code})")
+            self.finished.emit(exit_code)
+
+        self._cleanup()
+
+    def _on_process_error(self, error):
+        if error == 0 or error == 1:  # Ignore common false positives
+            return
+        self.error.emit(f"FFmpeg process error: {error}")
+        self.finished.emit(1)
+
+    def cancel(self):
+        """Cancel the entire processing pipeline safely"""
+        if self.is_cancelled:
+            return  # already cancelled
+
+        self.is_cancelled = True
+#        print("DEBUG: Cancel requested - terminating current process")
+
+        # Terminate any active QProcess
+        if self.process and self.process.state() == QProcess.Running:
+            self.process.terminate()  # polite terminate
+            # Optional: give it 2 seconds to terminate gracefully
+            QTimer.singleShot(2000, self._force_kill_process)
+
+        # Close any open write channel (for piped encoding)
+        if self.process and self.process.state() != QProcess.NotRunning:
+            self.process.closeWriteChannel()
+
+        # Emit feedback
+        self.progress.emit("Processing cancelled")
         if self.progress_callback:
-            self.progress_callback(0, 0, "Opening video...")
-        
-        cap = cv2.VideoCapture(input_path)
-        
-        if not cap.isOpened():
-            return False, f"Could not open video: {input_path}"
-        
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-        
-        frame_count = 0
-        processed_count = 0
-        start_time = time.time()
-        
+            self.progress_callback(0, 0, "Processing cancelled")
+
+        self.finished.emit(0)  # success exit code for cancel
+
+    def _force_kill_process(self):
+        """Force kill if terminate() didn't work"""
+        if self.process and self.process.state() == QProcess.Running:
+#            print("DEBUG: Force killing FFmpeg process")
+            self.process.kill()
+
+    def cancel2(self):
+        self.is_cancelled = True
+        if self.process and self.process.state() == QProcess.Running:
+            self.process.terminate()
+        self.progress.emit("Processing cancelled")
         if self.progress_callback:
-            self.progress_callback(0, 0, f"Processing {total_frames} frames...")
-        
-        while True:
-            if self.is_cancelled:
-                cap.release()
-                out.release()
-                if os.path.exists(output_path):
-                    os.remove(output_path)
-                return False, "Processing cancelled"
-            
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
-            processed_frame = self.process_frame(frame.copy())
-            out.write(processed_frame)
-            
-            processed_count += 1
-            frame_count += 1
-            
-            if self.progress_callback and frame_count % 5 == 0:
-                elapsed = time.time() - start_time
-                fps_actual = processed_count / elapsed if elapsed > 0 else 0
-                progress = (frame_count / total_frames) * 100
-                self.progress_callback(progress, fps_actual, f"Processing frame {frame_count}/{total_frames}")
-        
-        cap.release()
-        out.release()
-        
-        elapsed = time.time() - start_time
-        
-        if self.progress_callback:
-            self.progress_callback(95, processed_count / elapsed if elapsed > 0 else 0, "Merging audio...")
-        
-        audio_result = self._merge_audio(input_path, output_path, self.pitch_shift)
-        
-        if self.progress_callback:
-            if audio_result:
-                self.progress_callback(100, processed_count / elapsed if elapsed > 0 else 0, "Complete!")
-            else:
-                self.progress_callback(100, processed_count / elapsed if elapsed > 0 else 0, "Complete! (no audio - ffmpeg not found)")
-        
-        return True, f"Processing complete! Speed: {processed_count / elapsed:.2f} FPS"
+            self.progress_callback(0, 0, "Processing cancelled")
+
+        self.finished.emit(0)
+
+    def _cleanup(self):
+        for f in self.temp_files:
+            if os.path.exists(f):
+                try:
+                    os.remove(f)
+                except:
+                    pass
+        self.temp_files = []
+        if self.cap:
+            self.cap.release()
+
+    def _handle_output(self):
+        """Handle QProcess readyReadStandardOutput signal for progress/output"""
+        if self.process:
+            data = self.process.readAllStandardOutput().data().decode().strip()
+            if data:
+                self.progress.emit(data)            
