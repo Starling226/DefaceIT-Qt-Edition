@@ -235,8 +235,4 @@ https://www.nvidia.com/en-us/drivers/
 
 توجه: ترجمه توسط Grok انجام شده است.
 
-Screenshot of the DefaceIT Qt-Edition Application
-Here is the main GUI interface of DefaceIT Qt-Edition:
-DefaceIT Qt-Edition Main Interface
-(Screenshot showing language selection, input/output video fields, blur settings, device options, pitch shift controls, progress bar, and credits section)
 موفق باشید! 🚀
