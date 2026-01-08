@@ -1,4 +1,4 @@
-# DefaceIT
+# DefaceIT Qt-Edition
 
 <p align="center">
   <a href="#defaceit-فارسی">راهنمای فارسی</a> | <a href="#defaceit-فارسی">Persian Guide</a>
@@ -155,7 +155,7 @@ macOS version has not been tested yet
 ---
 
 <a id="defaceit-فارسی"></a>
-# DefaceIT (فارسی)
+# DefaceIT Qt-Edition (فارسی)
  
 **DefaceIT** یک برنامه چندپلتفرمی برای تار کردن (بلور کردن) چهره‌ها و پلاک خودروها در ویدیوها با استفاده از **YOLOv11** است. این برنامه از زبان‌های انگلیسی و فارسی پشتیبانی می‌کند و برای دسکتاپ (macOS، لینوکس، ویندوز) در دسترس است.
 
@@ -278,7 +278,7 @@ https://www.python.org/downloads/windows/
 
 ## اعتبارات
 **توسعه‌دهنده (نسخه Qt):** Starling226  
-**توسعه‌دهنده:** [Shin](https://x.com/hey_itsmyturn)  
+**توسعه‌دهنده (نسخه Tk):** [Shin](https://x.com/hey_itsmyturn)  
 
 - **توییتر (X):** [@hey_itsmyturn](https://x.com/hey_itsmyturn)  
 - **وب‌سایت:** [https://sh1n.org](https://sh1n.org)  
