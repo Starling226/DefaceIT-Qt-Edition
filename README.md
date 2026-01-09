@@ -22,9 +22,10 @@ DefaceIT is a cross-platform application for blurring faces and license plates i
 
 ### Screenshot of the DefaceIT Qt-Edition Application
 
-Here is the main GUI interface of DefaceIT Qt-Edition:
+Here is the main GUI interface of DefaceIT Qt-Edition in Linux and Windows:
 
-![DefaceIT Qt-Edition Main Interface](https://github.com/Starling226/DefaceIT-Qt-Edition/blob/main/screenshots/main-gui.png)  
+![DefaceIT Qt-Edition Main Interface](https://github.com/Starling226/DefaceIT-Qt-Edition/blob/main/screenshots/main-gui-linux.png)
+![DefaceIT Qt-Edition Main Interface](https://github.com/Starling226/DefaceIT-Qt-Edition/blob/main/screenshots/main-gui-windows.png)
 *(Screenshot showing language selection, input/output video fields, blur settings, device options, pitch shift controls, progress bar, and credits section)*
 
 ## Requirements
@@ -110,7 +111,6 @@ To enable GPU acceleration for faster processing:
 Install NVIDIA Driver for your Nvidia Graphics Card https://www.nvidia.com/en-us/drivers/
 
 ### Issues and Troubleshooting
-Window version may have issues with ffmpeg and may crash. Investigating...
 
 macOS version has not been tested yet
 
@@ -253,7 +253,7 @@ C:\ffmpeg\bin
 https://www.nvidia.com/en-us/drivers/
 
 ### مشکلات و رفع اشکال
-نسخه ویندوز ممکن است با ffmpeg مشکل داشته باشد و کرش کند (در حال بررسی است...)
+
 نسخه macOS هنوز تست نشده است
 
 ### مشکلات رایج دیگر

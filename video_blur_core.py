@@ -4,6 +4,8 @@ from ultralytics import YOLO
 from pathlib import Path
 from typing import List, Tuple, Optional
 import time
+import librosa
+import soundfile as sf
 import subprocess
 import os
 import shutil
@@ -252,7 +254,10 @@ class VideoBlurrer(QObject):
 
         self.process = QProcess()
         self.process.setProcessChannelMode(QProcess.MergedChannels)
-        self.process.readyReadStandardOutput.connect(self._handle_output)
+        self.process.readyReadStandardOutput.connect(
+            lambda proc=self.process: self._handle_output(proc)
+        )         
+#        self.process.readyReadStandardOutput.connect(self._handle_output)
         self.process.finished.connect(self._on_encoding_finished)
         self.process.errorOccurred.connect(self._on_process_error)
 
@@ -301,7 +306,6 @@ class VideoBlurrer(QObject):
 
         # Schedule next frame read
         QTimer.singleShot(0, self._process_next_frame)
-
 
     def _write_batch(self):
         if self.is_cancelled or self.process.state() != QProcess.Running:
@@ -353,6 +357,12 @@ class VideoBlurrer(QObject):
             return False
 
     def _merge_audio_async(self):
+
+        if self.process:
+            self.process.finished.disconnect() # Disconnect old signals
+            self.process.deleteLater()
+
+#        print("_merge_audio_async")
         temp_audio = str(Path(self.output_path).with_suffix('.temp_audio.wav'))
         self.temp_files.append(temp_audio)
 
@@ -362,46 +372,44 @@ class VideoBlurrer(QObject):
             '-vn', '-acodec', 'pcm_s16le',
             '-y', temp_audio
         ]
+        print(extract_cmd)
 
-        self.process = QProcess()
-        self.process.finished.connect(lambda code, status: self._on_audio_extract_finished(code, temp_audio))
-        self.process.errorOccurred.connect(self._on_process_error)
-        self.process.readyReadStandardOutput.connect(self._handle_output)
-
-        self.process.start(extract_cmd[0], extract_cmd[1:])
+        extract_process = QProcess()
+        extract_process.setProcessChannelMode(QProcess.MergedChannels)
+        extract_process.readyReadStandardOutput.connect(
+            lambda proc=extract_process: self._handle_output(proc)
+        )
+        extract_process.finished.connect(lambda code, status: self._on_audio_extract_finished(code, temp_audio))
+        extract_process.errorOccurred.connect(self._on_process_error)
+        extract_process.start(extract_cmd[0], extract_cmd[1:])
 
     def _on_audio_extract_finished(self, exit_code, temp_audio):
+#        print("_on_audio_extract_finished")
+        
         if self.is_cancelled:
             self._cleanup()
             self.finished.emit(0)
             return
-
+#        print("A1 ",exit_code)
         if exit_code != 0:
             self.error.emit(f"Audio extraction failed (code {exit_code})")
             self.finished.emit(exit_code)
             return
-
-        if abs(self.pitch_shift) > 0.01:
+#        print("A2")
+        if abs(self.pitch_shift) >= 0.1:
             shifted_audio = str(Path(temp_audio).with_suffix('.shifted.wav'))
             self.temp_files.append(shifted_audio)
             self.current_step = "shift_audio"
-            self._shift_audio_async(temp_audio, shifted_audio)
+#            print("A3")
+            QTimer.singleShot(100, lambda: self._shift_audio_async(temp_audio, shifted_audio))
+#            self._shift_audio_async(temp_audio, shifted_audio)
         else:
             self.current_step = "final_merge"
-            self._final_merge(temp_audio, temp_audio)
+            QTimer.singleShot(100, lambda: self._final_merge(temp_audio, temp_audio))
+#            self._final_merge(temp_audio, temp_audio)
 
-    def _shift_audio_pitch(self, input_audio_path: str, output_audio_path: str, semitones: float) -> bool:
-        """Synchronous fallback (fast, called from thread)"""
-        try:
-            y, sr = librosa.load(input_audio_path, sr=None)
-            y_shifted = librosa.effects.pitch_shift(y, sr=sr, n_steps=semitones)
-            sf.write(output_audio_path, y_shifted, sr)
-            return True
-        except Exception as e:
-            print(f"Librosa shift error: {e}")
-            return False
-
-    def _shift_audio_async(self, input_audio, output_audio):
+    def _shift_audio_async(self, input_audio, output_audio):   
+#        print("_shift_audio_async")
         pitch_ratio = 2 ** (self.pitch_shift / 12.0)
 
         cmd = [
@@ -411,12 +419,15 @@ class VideoBlurrer(QObject):
             '-y', output_audio
         ]
 
-        self.process = QProcess()
-        self.process.finished.connect(lambda code, status: self._on_shift_finished(code, output_audio))
-        self.process.errorOccurred.connect(self._on_process_error)
-        self.process.readyReadStandardOutput.connect(self._handle_output)
+        shift_process = QProcess()
+        shift_process.setProcessChannelMode(QProcess.MergedChannels)
+        shift_process.readyReadStandardOutput.connect(
+            lambda proc=shift_process: self._handle_output(proc)
+        )        
 
-        self.process.start(cmd[0], cmd[1:])
+        shift_process.finished.connect(lambda code, status: self._on_shift_finished(code, output_audio))
+        shift_process.errorOccurred.connect(self._on_process_error)
+        shift_process.start(cmd[0], cmd[1:])
 
     def _on_shift_finished(self, exit_code, output_audio):
         if self.is_cancelled:
@@ -424,17 +435,73 @@ class VideoBlurrer(QObject):
             self.finished.emit(0)
             return
 
-        if exit_code != 0:
+        if exit_code != 0:            
             # Fallback to asetrate (sync fallback)
-            if self._shift_audio_pitch(self.input_audio, output_audio, self.pitch_shift):
-                self.current_step = "final_merge"
-                self._final_merge(output_audio, output_audio)
-            else:
-                self.error.emit("Audio pitch shift failed")
-                self.finished.emit(1)
+            print("Rubberband pitch shift failed. Falling back to extraction + librosa...")
+            self.progress.emit("Rubberband pitch shift failed. Falling back to extraction + librosa...")
+            self._extract_audio_for_fallback(output_audio)
         else:
             self.current_step = "final_merge"
-            self._final_merge(output_audio, output_audio)
+#            self._final_merge(output_audio, output_audio)
+            QTimer.singleShot(50, lambda: self._final_merge(output_audio, output_audio))
+
+    def _extract_audio_for_fallback(self, final_shifted_path):
+        """Extract raw audio when rubberband failed, then apply librosa pitch shift"""
+        self.progress.emit("Extracting raw audio for fallback pitch shift...")
+        self.temp_audio_path = str(Path(self.output_path).with_suffix('.fallback_raw_.wav'))
+        self.temp_files.append(self.temp_audio_path)
+        self.shifted_audio_path = final_shifted_path  # reuse the intended output path
+
+        extract_cmd = [
+            self.ffmpeg_path,
+            '-i', self.input_path,
+            '-acodec', 'pcm_s16le', # Raw 16-bit little-endian PCM (compatible with librosa)
+            '-vn',                  # No video
+            '-ac', '2',
+            '-y',
+            self.temp_audio_path
+        ]
+
+        audio_falback_process = QProcess()
+        audio_falback_process.setProcessChannelMode(QProcess.MergedChannels)
+        audio_falback_process.readyReadStandardOutput.connect(
+            lambda proc=audio_falback_process: self._handle_output(proc)
+        )          
+        audio_falback_process.finished.connect(self._on_fallback_extract_finished)
+        audio_falback_process.errorOccurred.connect(self._on_process_error)
+        started = audio_falback_process.start(extract_cmd[0], extract_cmd[1:])
+
+#        if not started:
+#            self.error.emit("Failed to start FFmpeg for fallback extraction")
+#            self._cleanup()
+#            self.finished.emit(1)
+
+    def _on_fallback_extract_finished(self, exit_code, exit_status):
+        if self.is_cancelled:
+            self._cleanup()
+            self.finished.emit(0)
+            return
+
+        if exit_code != 0 or not os.path.exists(self.temp_audio_path):
+            self.error.emit(f"Fallback audio extraction failed (code {exit_code})")
+            self._cleanup()
+            self.finished.emit(1)
+            return
+
+        self.progress.emit("Applying pitch shift using librosa (fallback)...")
+        pitch_ratio = 2 ** (self.pitch_shift / 12.0)
+        try:
+            y, sr = librosa.load(self.temp_audio_path, sr=None)
+            y_shifted = librosa.effects.pitch_shift(y, sr=sr, n_steps=self.pitch_shift)
+            sf.write(self.shifted_audio_path, y_shifted, sr)
+            self.progress.emit("Fallback pitch shift complete.")
+            self.current_step = "final_merge"
+#            self._final_merge(self.shifted_audio_path, self.shifted_audio_path)
+            QTimer.singleShot(50, lambda: self._final_merge(self.shifted_audio_path, self.shifted_audio_path))
+        except Exception as e:
+            self.error.emit(f"Librosa fallback failed: {str(e)}")
+            self._cleanup()
+            self.finished.emit(1)
 
     def _final_merge(self, audio_file, temp_audio):
         final_output = str(Path(self.output_path).with_suffix('.final.mp4'))
@@ -453,12 +520,13 @@ class VideoBlurrer(QObject):
             final_output
         ]
 
-        self.process = QProcess()
-        self.process.finished.connect(lambda code, status: self._on_final_merge_finished(code, final_output, temp_audio))
-        self.process.errorOccurred.connect(self._on_process_error)
-        self.process.readyReadStandardOutput.connect(self._handle_output)
-
-        self.process.start(merge_cmd[0], merge_cmd[1:])
+        final_merge_process = QProcess()
+        final_merge_process.finished.connect(lambda code, status: self._on_final_merge_finished(code, final_output, temp_audio))
+        final_merge_process.errorOccurred.connect(self._on_process_error)
+        final_merge_process.readyReadStandardOutput.connect(
+            lambda proc=final_merge_process: self._handle_output(proc)
+        )          
+        final_merge_process.start(merge_cmd[0], merge_cmd[1:])
 
     def _on_final_merge_finished(self, exit_code, final_output, temp_audio):
         if self.is_cancelled:
@@ -516,16 +584,6 @@ class VideoBlurrer(QObject):
 #            print("DEBUG: Force killing FFmpeg process")
             self.process.kill()
 
-    def cancel2(self):
-        self.is_cancelled = True
-        if self.process and self.process.state() == QProcess.Running:
-            self.process.terminate()
-        self.progress.emit("Processing cancelled")
-        if self.progress_callback:
-            self.progress_callback(0, 0, "Processing cancelled")
-
-        self.finished.emit(0)
-
     def _cleanup(self):
         for f in self.temp_files:
             if os.path.exists(f):
@@ -537,7 +595,13 @@ class VideoBlurrer(QObject):
         if self.cap:
             self.cap.release()
 
-    def _handle_output(self):
+    def _handle_output(self, process: QProcess):
+        """Handle output from a specific QProcess instance"""
+        data = process.readAllStandardOutput().data().decode(errors='ignore').strip()
+        if data:
+            self.progress.emit(data)
+
+    def _handle_output2(self):
         """Handle QProcess readyReadStandardOutput signal for progress/output"""
         if self.process:
             data = self.process.readAllStandardOutput().data().decode().strip()

@@ -103,7 +103,7 @@ LANGUAGES = {
 
 CREDITS = {
     "original_author": "Shin (Tkinter version)",
-    "fork_author": "Starling226 (PyQt5 modernization, new features)",
+    "fork_author": "Starling226 (Qt modernization, new features)",
     "original_x": "https://x.com/hey_itsmyturn",
     "original_website": "https://sh1n.org",
     "original_telegram": "https://t.me/itsthealephyouknowfromtwitter",

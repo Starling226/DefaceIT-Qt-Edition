@@ -168,8 +168,123 @@ class PreviewAudioWorker(QObject):
         self.progress.emit("Preview cancelled")
         self.finished.emit(0)
 
-
 class CustomLabeledSlider(QWidget):
+    valueChanged = pyqtSignal(float)
+
+    def __init__(self, orientation=Qt.Horizontal, min_val=-12.0, max_val=12.0, def_val=0.0, step=0.1, parent=None):
+        super().__init__(parent)
+
+        if step == 0:
+            raise ValueError("step cannot be zero")
+
+        self.step = float(step)
+        self.precision = int(round(1.0 / self.step))  # Safer rounding
+        self.is_float = True  # We always treat as float now (simpler)
+
+        # Slider - internal integer scaling
+        self.slider = QSlider(orientation, self)
+        self.slider.setRange(int(round(min_val * self.precision)),
+                             int(round(max_val * self.precision)))
+        self.slider.setSingleStep(1)
+        self.slider.setPageStep(self.precision)  # Better keyboard navigation
+
+        # Default value (clamped)
+        def_val = max(min_val, min(def_val, max_val))
+        scaled_def = int(round(def_val * self.precision))
+        self.slider.setValue(scaled_def)
+
+        # Line edit
+        self.line_edit = QLineEdit(self)
+        self.line_edit.setFixedWidth(70)
+        self.line_edit.setAlignment(Qt.AlignCenter)
+        self.line_edit.setText(f"{def_val:.2f}" if abs(def_val % 1) > 0.001 else f"{int(def_val)}")
+
+        # Validator - always float
+        validator = QDoubleValidator(min_val, max_val, 2)
+        validator.setNotation(QDoubleValidator.StandardNotation)
+        validator.setLocale(QLocale.c())  # Force dot as decimal
+        self.line_edit.setValidator(validator)  # ← Only once!
+
+        # Clean borderless style (avoid painting issues)
+        self.line_edit.setStyleSheet("""
+            QLineEdit {
+                border: 0px;
+                background-color: palette(window);
+                padding: 2px 4px;
+            }
+            QLineEdit:focus {
+                background-color: palette(base);
+                border: 0px;
+            }
+        """)
+
+        # Layout
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(8)
+        layout.addWidget(self.slider, stretch=1)
+        layout.addWidget(self.line_edit)
+
+        # Signals
+        self.slider.valueChanged.connect(self._slider_moved)
+        self.line_edit.editingFinished.connect(self._edit_finished)
+        self.line_edit.returnPressed.connect(self._edit_finished)
+
+        # Initial display
+        self._update_edit_from_slider()
+
+    def _slider_moved(self, scaled_value):
+        real_value = scaled_value / self.precision
+        self.line_edit.blockSignals(True)
+        self.line_edit.setText(f"{real_value:.2f}")
+        self.line_edit.blockSignals(False)
+        self.valueChanged.emit(real_value)
+
+    def _edit_finished(self):
+        text = self.line_edit.text().strip().replace(',', '.')  # Allow comma on some locales
+        try:
+            value = float(text)
+            # Snap to step
+            value = round(value / self.step) * self.step
+            value = max(self.minimum(), min(value, self.maximum()))
+
+            scaled = int(round(value * self.precision))
+            self.slider.blockSignals(True)
+            self.slider.setValue(scaled)
+            self.slider.blockSignals(False)
+
+            self.line_edit.setText(f"{value:.2f}")
+            self.valueChanged.emit(value)
+        except ValueError:
+            self._update_edit_from_slider()
+
+    def _update_edit_from_slider(self):
+        value = self.value()
+        self.line_edit.setText(f"{value:.2f}")
+
+    # Proxy methods
+    def value(self):
+        return self.slider.value() / self.precision
+
+    def setValue(self, value):
+        value = round(value / self.step) * self.step
+        value = max(self.minimum(), min(value, self.maximum()))
+        scaled = int(round(value * self.precision))
+        self.slider.setValue(scaled)
+        self._update_edit_from_slider()
+        self.valueChanged.emit(value)
+
+    def setRange(self, min_val, max_val):
+        self.slider.setRange(int(round(min_val * self.precision)),
+                             int(round(max_val * self.precision)))
+
+    def minimum(self):
+        return self.slider.minimum() / self.precision
+
+    def maximum(self):
+        return self.slider.maximum() / self.precision
+
+class CustomLabeledSlider2(QWidget):
     """
     Custom slider with editable label supporting float values and custom step.
     Example: CustomLabeledSlider(min_val=-12.0, max_val=12.0, def_val=0.0, step=0.1)
@@ -207,8 +322,6 @@ class CustomLabeledSlider(QWidget):
             validator.setLocale(QLocale.c())  # Ensures dot (.) as decimal separator
         else:
             validator = QIntValidator(min_val, max_val)
-        self.line_edit.setValidator(validator)
-
         self.line_edit.setValidator(validator)
 
         self.line_edit.setStyleSheet("""
@@ -311,11 +424,12 @@ class DefaceITApp(QMainWindow):
         self.detect_faces = True
         self.detect_license_plates = True
         self.device = "cpu"
-        self.pitch_shift = -4.0
+        self.pitch_shift = -6.0
         self.prev_length = 10 # seconds
         self.audio_preview_playing = False
         self.is_processing = False
         self.blurrer = None
+        self.last_update = 0.0
 
         # Thread & worker
         self.thread = None
@@ -348,6 +462,7 @@ class DefaceITApp(QMainWindow):
             self.ffmpeg_browse_text = "*.*"
 
     def init_ui(self):
+
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
@@ -821,11 +936,18 @@ class DefaceITApp(QMainWindow):
             self.ffmpeg_edit.setText(filename)
 
     def update_progress(self, progress, fps, status):
+        current_time = time.time()
+        # Only update UI max every 0.3 seconds (~3 times per second)
+        if current_time - self.last_update < 0.3:
+            return  # Skip this update - too soon
+    
+        self.last_update = current_time
+
         self.progress_bar.setValue(int(progress))
         self.status_label.setText(status)
         if fps > 0:
             self.fps_label.setText(f"{self.texts['processing_speed']} {fps:.1f} {self.texts['fps']}")
-        QApplication.processEvents()  # Force UI update (similar to update_idletasks)
+#XX        QApplication.processEvents()  # Force UI update (similar to update_idletasks)
 
     def check_gpu_compatibility(self):
         """Check GPU compatibility and update GUI radio buttons accordingly"""
@@ -997,6 +1119,10 @@ class DefaceITApp(QMainWindow):
             return
         
         ffmpeg_edit = self.ffmpeg_edit.text().strip()
+        os_type = platform.system().lower()
+        if os_type == "windows":
+            ffmpeg_edit =str(Path(ffmpeg_edit).as_posix().lower())
+        
         if ffmpeg_edit == "":
             QMessageBox.warning(self, "Error", "ffmpeg is not set")
             return
@@ -1008,7 +1134,7 @@ class DefaceITApp(QMainWindow):
 
         self.ffmpeg_edit.setStyleSheet("color: rgb(0, 0, 0);")
         self.ffmpeg_path = ffmpeg_edit
-#        self.ffmpeg_path = self.get_ffmpeg_path()
+
         if not self.check_if_ffmpeg_exist(self.ffmpeg_path):
             return
 
@@ -1160,6 +1286,10 @@ class DefaceITApp(QMainWindow):
         self.status_label.setStyleSheet("color: blue;")
 
         ffmpeg_edit = self.ffmpeg_edit.text().strip()
+        os_type = platform.system().lower()
+        if os_type == "windows":
+            ffmpeg_edit =str(Path(ffmpeg_edit).as_posix().lower())
+
         if ffmpeg_edit == "":
             QMessageBox.warning(self, "Error", "ffmpeg is not set")
             return
@@ -1171,10 +1301,8 @@ class DefaceITApp(QMainWindow):
 
         self.ffmpeg_edit.setStyleSheet("color: rgb(0, 0, 0);")
         self.ffmpeg_path = ffmpeg_edit
-#        self.ffmpeg_path = self.get_ffmpeg_path()
         if not self.check_if_ffmpeg_exist(self.ffmpeg_path):
             return
-
         try:
             self.preview_thread = QThread()
             self.preview_worker = PreviewAudioWorker(self.input_file, pitch_val, self.ffmpeg_path, self.prev_length)
