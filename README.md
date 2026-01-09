@@ -25,7 +25,9 @@ DefaceIT is a cross-platform application for blurring faces and license plates i
 Here is the main GUI interface of DefaceIT Qt-Edition in Linux and Windows:
 
 ![DefaceIT Qt-Edition Main Interface](https://github.com/Starling226/DefaceIT-Qt-Edition/blob/main/screenshots/main-gui-linux.png)
+
 ![DefaceIT Qt-Edition Main Interface](https://github.com/Starling226/DefaceIT-Qt-Edition/blob/main/screenshots/main-gui-windows.png)
+
 *(Screenshot showing language selection, input/output video fields, blur settings, device options, pitch shift controls, progress bar, and credits section)*
 
 ## Requirements
