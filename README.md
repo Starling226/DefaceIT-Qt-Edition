@@ -25,12 +25,16 @@ DefaceIT is a cross-platform application for blurring faces and license plates i
 Here is the main GUI interface of DefaceIT Qt-Edition in Linux and Windows:
 
 ![DefaceIT Qt-Edition Main Interface](https://github.com/Starling226/DefaceIT-Qt-Edition/blob/main/screenshots/main-gui-linux.png)
-
 ![DefaceIT Qt-Edition Main Interface](https://github.com/Starling226/DefaceIT-Qt-Edition/blob/main/screenshots/main-gui-windows.png)
-
 *(Screenshot showing language selection, input/output video fields, blur settings, device options, pitch shift controls, progress bar, and credits section)*
 
 ## Requirements
+
+### Using GPU (NVIDIA)
+To enable GPU acceleration for faster processing:
+
+Install NVIDIA Driver for your Nvidia Graphics Card https://www.nvidia.com/en-us/drivers/
+
 - Python 3.8 or higher (python-3.11.6 has been tested successfully. Latest python has compatibility issues and failed to install numpy in Windows.)
 - ffmpeg (for video re-encoding and audio preservation)
 - macOS: `brew install ffmpeg`
@@ -107,11 +111,6 @@ either, double click on setup.bat or, Open PowerShell
    python run.py
    ```
 
-### Using GPU (NVIDIA)
-To enable GPU acceleration for faster processing:
-
-Install NVIDIA Driver for your Nvidia Graphics Card https://www.nvidia.com/en-us/drivers/
-
 ### Issues and Troubleshooting
 
 macOS version has not been tested yet
@@ -168,6 +167,13 @@ macOS version has not been tested yet
 - تنظیمات قابل سفارشی‌سازی (قدرت تار کردن، آستانه اطمینان، نوع تار شدن)
 
 ## نیازمندی‌ها
+
+### استفاده از GPU (NVIDIA)
+برای فعال‌سازی شتاب‌دهی GPU و پردازش سریع‌تر:
+
+درایور NVIDIA مناسب کارت گرافیک خود را نصب کنید:
+
+https://www.nvidia.com/en-us/drivers/
 
 - پایتون 3.8 یا بالاتر (نسخه 3.11.6 با موفقیت تست شده است. نسخه‌های جدیدتر پایتون در ویندوز با نصب numpy مشکل دارند)
 ffmpeg (برای بازکدگذاری ویدیو و حفظ صدا) -
@@ -247,12 +253,6 @@ C:\ffmpeg\bin
    ```bash
    python run.py
    ```
-### استفاده از GPU (NVIDIA)
-برای فعال‌سازی شتاب‌دهی GPU و پردازش سریع‌تر:
-
-درایور NVIDIA مناسب کارت گرافیک خود را نصب کنید:
-
-https://www.nvidia.com/en-us/drivers/
 
 ### مشکلات و رفع اشکال
 
