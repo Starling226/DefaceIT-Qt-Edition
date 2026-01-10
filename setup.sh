@@ -65,6 +65,8 @@ echo ""
 echo "Installing Python dependencies from requirements.txt..."
 echo "This may take a few minutes..."
 pip install -r requirements.txt
+# Then install torch family from the CUDA 13.0 wheel index
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
 
 if [ $? -eq 0 ]; then
     echo ""

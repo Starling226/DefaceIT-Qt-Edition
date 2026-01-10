@@ -4,19 +4,19 @@ from ultralytics import YOLO
 from pathlib import Path
 from typing import List, Tuple, Optional
 import time
+import platform
 import librosa
 import soundfile as sf
 import subprocess
 import os
 import shutil
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QProcess, QProcessEnvironment
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject,  QProcess
 
 class VideoBlurrer(QObject):
-    """Fully asynchronous video blurring worker using QProcess signals"""
-
-    progress = pyqtSignal(str)      # status messages
-    finished = pyqtSignal(int)      # exit code (0 = success)
-    error = pyqtSignal(str)         # error messages
+    """Asynchronous video blurring worker using OpenCV VideoWriter"""
+    progress = pyqtSignal(str)       # status messages
+    finished = pyqtSignal(int)       # exit code (0 = success)
+    error = pyqtSignal(str)          # error messages
 
     def __init__(
         self,
@@ -34,7 +34,7 @@ class VideoBlurrer(QObject):
         input_file: str = "",
         output_file: str = "",
         ffmpeg_path: str = "",
-        crf_value: int = 16
+        crf_value: int = 22
     ):
         super().__init__()
         self.blur_strength = blur_strength if blur_strength % 2 == 1 else blur_strength + 1
@@ -50,34 +50,19 @@ class VideoBlurrer(QObject):
         self.output_path = output_file
         self.ffmpeg_path = ffmpeg_path
         self.crf_value = crf_value
-        self.progress_callback = progress_callback  # optional direct callback
-
-        # Async state
+        self.progress_callback = progress_callback
         self.current_step = "init"
-        self.temp_files = []  # cleanup list
+        self.temp_files = []
         self.cap = None
-        self.out = None
-        self.process = None  # current QProcess
+        self.writer = None
         self.temp_audio = None
         self.shifted_audio = None
-        self.reencoded_video = None
-
-        self.frame_queue = []           # list of bytes
-        self._writing_started = False   # flag to start writer only once
-        self._write_timer_active = False
-
-        # Device auto-detection
-        '''
-        if device == "auto":
-            import torch
-            if torch.cuda.is_available():
-                device = "cuda"
-            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-                device = "mps"
-            else:
-                device = "cpu"
-        '''
-
+        self.frame_count = 0
+        self.start_time = 0.0
+        self.total_frames = 0
+        self.fps = 0.0
+        self.width = 0
+        self.height = 0
         self.device = device
 
         # Load models
@@ -92,7 +77,6 @@ class VideoBlurrer(QObject):
             self.models.append(("license_plate", lp_model))
 
     def start(self):
-        """Public method to start the async processing"""
         if self.is_cancelled:
             self.finished.emit(0)
             return
@@ -103,32 +87,44 @@ class VideoBlurrer(QObject):
         self.progress.emit("Opening video...")
         if self.progress_callback:
             self.progress_callback(0, 0, "Opening video...")
-
         try:
             self.cap = cv2.VideoCapture(self.input_path)
             if not self.cap.isOpened():
                 raise Exception(f"Could not open video: {self.input_path}")
-
-            fps = int(self.cap.get(cv2.CAP_PROP_FPS))
-            width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            self.fps = float(self.cap.get(cv2.CAP_PROP_FPS))
+            self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-            self.progress.emit(f"Processing {self.total_frames} frames...")
+            self.progress.emit(f"Processing {self.total_frames} frames at {self.fps:.1f} FPS...")
             if self.progress_callback:
                 self.progress_callback(0, 0, f"Processing {self.total_frames} frames...")
-
-
             self.current_step = "process_frames"
-            self._start_frame_processing_pipe(fps, width, height)
-
+            self._start_frame_processing()
         except Exception as e:
             self.error.emit(f"Open video error: {str(e)}")
             self.finished.emit(1)
 
+    def _start_frame_processing(self):
+        """Initialize OpenCV VideoWriter for direct MP4 writing"""
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Safe fallback codec
+        self.writer = cv2.VideoWriter(
+            self.output_path,
+            fourcc,
+            self.fps,
+            (self.width, self.height)
+        )
+        if not self.writer.isOpened():
+            self.error.emit("Failed to open OpenCV VideoWriter! Check codec support or file permissions.")
+            self.finished.emit(1)
+            return
+
+        self.progress.emit(f"Writing processed frames directly to MP4: {self.output_path}")
+        self.frame_count = 0
+        self.start_time = time.time()
+        QTimer.singleShot(0, self._process_next_frame)
+
     def blur_region(self, frame: np.ndarray, bbox: Tuple[int, int, int, int], padding: float = 0.0) -> np.ndarray:
         x1, y1, x2, y2 = bbox
-
         if padding > 0:
             width = x2 - x1
             height = y2 - y1
@@ -138,15 +134,11 @@ class VideoBlurrer(QObject):
             y1 = max(0, y1 - pad_y)
             x2 = min(frame.shape[1], x2 + pad_x)
             y2 = min(frame.shape[0], y2 + pad_y)
-
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
-
         if x2 <= x1 or y2 <= y1:
             return frame
-
         roi = frame[y1:y2, x1:x2]
-
         if self.blur_type == "gaussian":
             blurred_roi = cv2.GaussianBlur(roi, (self.blur_strength, self.blur_strength), 0)
         elif self.blur_type == "pixelate":
@@ -155,23 +147,19 @@ class VideoBlurrer(QObject):
             blurred_roi = cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
         else:
             blurred_roi = cv2.GaussianBlur(roi, (self.blur_strength, self.blur_strength), 0)
-
         frame[y1:y2, x1:x2] = blurred_roi
         return frame
 
     def process_frame(self, frame: np.ndarray) -> np.ndarray:
         for model_type, model in self.models:
             results = model(frame, conf=self.confidence, iou=0.5, verbose=False)
-
             for result in results:
                 boxes = result.boxes
                 if len(boxes) == 0:
                     continue
-
                 for box in boxes:
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
                     cls = int(box.cls[0].cpu().numpy())
-
                     if model_type == "face":
                         if cls == 0:
                             height = y2 - y1
@@ -183,89 +171,9 @@ class VideoBlurrer(QObject):
                             self.blur_region(frame, (face_x1, face_y1, face_x2, face_y2), padding=self.face_padding)
                         else:
                             self.blur_region(frame, (x1, y1, x2, y2), padding=self.face_padding)
-
                     elif model_type == "license_plate":
                         self.blur_region(frame, (x1, y1, x2, y2), padding=0.1)
-
         return frame
-
-    def _start_frame_processing_pipe(self, fps, width, height):
-        '''
-        if self.device == "cpu" or self.device == "mps":
-            cmd = [
-                self.ffmpeg_path,
-                '-y',
-                '-f', 'rawvideo',
-                '-vcodec', 'rawvideo',
-                '-pix_fmt', 'bgr24',
-                '-s', f"{width}x{height}",
-                '-r', str(fps),
-                '-i', '-',
-                '-c:v', 'libx264',
-                '-preset', 'medium',
-                '-crf', str(self.crf_value),
-                '-threads', '0',
-                '-pix_fmt', 'yuv420p',
-                '-movflags', '+faststart',
-                self.output_path
-            ]
-
-        else: # GPU
-            self.crf_value = min(self.crf_value + 3, 28)
-            cmd = [
-                self.ffmpeg_path,
-                '-y',
-                '-f', 'rawvideo',
-                '-vcodec', 'rawvideo',
-                '-pix_fmt', 'bgr24',
-                '-s', f"{width}x{height}",
-                '-r', str(fps),
-                '-i', '-',
-                '-c:v', 'h264_nvenc',             # NVIDIA hardware encoder
-                '-preset', 'p7',                  # p7 = highest quality (slowest), p1 = fastest
-                '-rc', 'vbr',                     # Variable bitrate (recommended for quality)
-                '-cq', str(self.crf_value),       # Constant quality (like CRF, 19–23 is excellent)
-                '-b:v', '3000k',                     # Target bitrate (5 Mbps) - adjust for resolution
-                '-maxrate', '6000k',                # Max bitrate (optional, prevents spikes)
-                '-bufsize', '12000k',                # Buffer size (match maxrate)
-                '-pix_fmt', 'yuv420p',
-                '-movflags', '+faststart',
-                '-threads', '0',                  # NVENC ignores threads anyway
-                self.output_path
-            ]
-        '''
-        cmd = [
-            self.ffmpeg_path,
-            '-y',
-            '-f', 'rawvideo',
-            '-vcodec', 'rawvideo',
-            '-pix_fmt', 'bgr24',
-            '-s', f"{width}x{height}",
-            '-r', str(fps),
-            '-i', '-',
-            '-c:v', 'libx264',
-            '-preset', 'medium',
-            '-crf', str(self.crf_value),
-            '-threads', '0',
-            '-pix_fmt', 'yuv420p',
-            '-movflags', '+faststart',
-            self.output_path
-        ]
-
-        self.process = QProcess()
-        self.process.setProcessChannelMode(QProcess.MergedChannels)
-        self.process.readyReadStandardOutput.connect(
-            lambda proc=self.process: self._handle_output(proc)
-        )         
-#        self.process.readyReadStandardOutput.connect(self._handle_output)
-        self.process.finished.connect(self._on_encoding_finished)
-        self.process.errorOccurred.connect(self._on_process_error)
-
-        self.process.start(cmd[0], cmd[1:])
-
-        self.frame_count = 0
-        self.start_time = time.time()
-        QTimer.singleShot(0, self._process_next_frame)
 
     def _process_next_frame(self):
         if self.is_cancelled:
@@ -276,93 +184,102 @@ class VideoBlurrer(QObject):
         ret, frame = self.cap.read()
         if not ret:
             self.cap.release()
-#            self.process.close()
-            self.process.closeWriteChannel()  # Signals EOF to FFmpeg
-            self.progress.emit("All frames processed. Waiting for encoding...")
-            if self.progress_callback:
-                self.progress_callback(0, 0, "All frames processed. Waiting for encoding...")
-
+            if hasattr(self, 'writer') and self.writer:
+                self.writer.release()
+                self.progress.emit("All frames written to MP4.")
+                if self.progress_callback:
+                    self.progress_callback(100, 0, "All frames processed.")
+            QTimer.singleShot(100, self._finalize_video)
             return
 
         processed_frame = self.process_frame(frame.copy())
-
-        # Step 1-3: Collect frames in queue (add to buffer instead of direct write)
-        self.frame_queue.append(processed_frame.tobytes())  # ← Add to queue
+        self.writer.write(processed_frame)
 
         self.frame_count += 1
-        if self.frame_count % 5 == 0:
+
+        if self.frame_count % 10 == 0:
             elapsed = time.time() - self.start_time
             fps_actual = self.frame_count / elapsed if elapsed > 0 else 0
-            progress = (self.frame_count / self.total_frames) * 100 if self.total_frames > 0 else 0
-            self.progress.emit(f"Processing frame {self.frame_count}/{self.total_frames} ({fps_actual:.1f} FPS)")
+            progress = (self.frame_count / self.total_frames) * 100
+            self.progress.emit(f"Processed & written frame {self.frame_count}/{self.total_frames} ({fps_actual:.1f} FPS)")
             if self.progress_callback:
-                self.progress_callback(progress, fps_actual, f"Processing frame {self.frame_count}/{self.total_frames}")        
+                self.progress_callback(progress, fps_actual, f"Frame {self.frame_count}/{self.total_frames}")
 
-        # Step 4: Start writing queued frames in batches (only once, on first call)
-#        if not hasattr(self, '_writing_started') or not self._writing_started:
-        if not self._write_timer_active:
-            self._writing_started = True
-            QTimer.singleShot(20, self._write_batch)  # Start batch writer
-
-        # Schedule next frame read
         QTimer.singleShot(0, self._process_next_frame)
 
-    def _write_batch(self):
-        if self.is_cancelled or self.process.state() != QProcess.Running:
-            self._write_timer_active = False
-            return
-
-        batch_size = 5  # Write 5 frames at a time (adjust 5-20)
-        batch = self.frame_queue[:batch_size]
-        self.frame_queue = self.frame_queue[batch_size:]
-
-        for frame_bytes in batch:
-            try:
-                self.process.write(frame_bytes)
-            except Exception as e:
-                self.error.emit(f"Pipe write error: {str(e)}")
-                self.finished.emit(1)
-                return
-
-        # If more frames, schedule next batch
-        if self.frame_queue:
-            QTimer.singleShot(50, self._write_batch)
-        else:
-            self._write_timer_active = False
-
-    def _on_encoding_finished(self, exit_code, exit_status):
-        if self.is_cancelled:
-            self._cleanup()
+    def _finalize_video(self):
+        if not self.reencode_to_h264:
+            self.progress.emit("Processing complete! (No final re-encode)")
             self.finished.emit(0)
             return
 
-        if exit_code != 0:
-            self.error.emit(f"Encoding failed (code {exit_code})")
-            self.finished.emit(exit_code)
-            return
+        self.progress.emit("Finalizing video with FFmpeg (H.264 optimization)...")
 
-        self.progress.emit("Encoding complete. Merging audio...")
-        if self.progress_callback:
-            self.progress_callback(0, 0, "Encoding complete. Merging audio...")
+        temp_mp4 = self.output_path
+        path = Path(temp_mp4)
+        final_mp4 = str(path.with_name(f"{path.stem}_final{path.suffix}"))
+        self.temp_files.append(final_mp4)
 
-        self.current_step = "merge_audio"
-        self._merge_audio_async()
+        reencode_cmd = [
+            self.ffmpeg_path,
+            '-i', temp_mp4,
+            '-c:v', 'libx264',
+            '-preset', 'medium',
+            '-crf', str(self.crf_value),
+            '-pix_fmt', 'yuv420p',
+            '-movflags', '+faststart',
+            '-y',
+            final_mp4
+        ]
 
-    def _check_ffmpeg(self) -> bool:
-        """Non-blocking check (but we can call it sync since it's fast)"""
-        try:
-            result = subprocess.run([self.ffmpeg_path, "-version"], capture_output=True, text=True, check=False)
-            return result.returncode == 0
-        except:
-            return False
+        if platform.system().lower() == 'windows':
+            # Windows: use subprocess.run (more stable)
+
+            try:
+                result = subprocess.run(
+                    reencode_cmd,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )                
+
+                self.progress.emit("FFmpeg finalization complete!")
+                # Replace original with optimized version
+                os.replace(final_mp4, self.output_path)
+                self.current_step = "merge_audio"
+                self._merge_audio_async()
+#                self.finished.emit(0)
+            except subprocess.CalledProcessError as e:
+                self.error.emit(f"FFmpeg finalization failed (code {e.returncode})\n{e.stderr}")
+                self.finished.emit(1)
+            except Exception as e:
+                self.error.emit(f"Unexpected error during finalization: {str(e)}")
+                self.finished.emit(1)                
+        else:
+            # Linux/macOS: use QProcess
+            reencode_process = QProcess(self)
+            reencode_process.setProcessChannelMode(QProcess.MergedChannels)
+            reencode_process.readyReadStandardOutput.connect(
+                lambda proc=reencode_process: self._handle_output(proc)
+            )
+            reencode_process.finished.connect(lambda code, status: self._on_finalize_finished(code, final_mp4))
+            reencode_process.errorOccurred.connect(self._on_process_error)
+            self.current_step = "merge_audio"
+            reencode_process.start(reencode_cmd[0], reencode_cmd[1:])        
+
+    def _on_finalize_finished(self, exit_code, final_mp4):
+        if exit_code == 0:
+            self.progress.emit("FFmpeg finalization complete!")
+            os.replace(final_mp4, self.output_path)
+            self._merge_audio_async()
+#            self.finished.emit(0)
+        else:
+            self.error.emit(f"FFmpeg finalization failed (code {exit_code})")
+            self.finished.emit(1)
 
     def _merge_audio_async(self):
 
-        if self.process:
-            self.process.finished.disconnect() # Disconnect old signals
-            self.process.deleteLater()
-
-#        print("_merge_audio_async")
         temp_audio = str(Path(self.output_path).with_suffix('.temp_audio.wav'))
         self.temp_files.append(temp_audio)
 
@@ -374,7 +291,7 @@ class VideoBlurrer(QObject):
         ]
         print(extract_cmd)
 
-        extract_process = QProcess()
+        extract_process = QProcess(self)
         extract_process.setProcessChannelMode(QProcess.MergedChannels)
         extract_process.readyReadStandardOutput.connect(
             lambda proc=extract_process: self._handle_output(proc)
@@ -384,32 +301,29 @@ class VideoBlurrer(QObject):
         extract_process.start(extract_cmd[0], extract_cmd[1:])
 
     def _on_audio_extract_finished(self, exit_code, temp_audio):
-#        print("_on_audio_extract_finished")
         
         if self.is_cancelled:
             self._cleanup()
             self.finished.emit(0)
             return
-#        print("A1 ",exit_code)
+
         if exit_code != 0:
             self.error.emit(f"Audio extraction failed (code {exit_code})")
             self.finished.emit(exit_code)
             return
-#        print("A2")
+
         if abs(self.pitch_shift) >= 0.1:
             shifted_audio = str(Path(temp_audio).with_suffix('.shifted.wav'))
             self.temp_files.append(shifted_audio)
             self.current_step = "shift_audio"
-#            print("A3")
+
             QTimer.singleShot(100, lambda: self._shift_audio_async(temp_audio, shifted_audio))
-#            self._shift_audio_async(temp_audio, shifted_audio)
         else:
             self.current_step = "final_merge"
             QTimer.singleShot(100, lambda: self._final_merge(temp_audio, temp_audio))
-#            self._final_merge(temp_audio, temp_audio)
 
     def _shift_audio_async(self, input_audio, output_audio):   
-#        print("_shift_audio_async")
+
         pitch_ratio = 2 ** (self.pitch_shift / 12.0)
 
         cmd = [
@@ -419,7 +333,7 @@ class VideoBlurrer(QObject):
             '-y', output_audio
         ]
 
-        shift_process = QProcess()
+        shift_process = QProcess(self)
         shift_process.setProcessChannelMode(QProcess.MergedChannels)
         shift_process.readyReadStandardOutput.connect(
             lambda proc=shift_process: self._handle_output(proc)
@@ -442,7 +356,6 @@ class VideoBlurrer(QObject):
             self._extract_audio_for_fallback(output_audio)
         else:
             self.current_step = "final_merge"
-#            self._final_merge(output_audio, output_audio)
             QTimer.singleShot(50, lambda: self._final_merge(output_audio, output_audio))
 
     def _extract_audio_for_fallback(self, final_shifted_path):
@@ -462,7 +375,7 @@ class VideoBlurrer(QObject):
             self.temp_audio_path
         ]
 
-        audio_falback_process = QProcess()
+        audio_falback_process = QProcess(self)
         audio_falback_process.setProcessChannelMode(QProcess.MergedChannels)
         audio_falback_process.readyReadStandardOutput.connect(
             lambda proc=audio_falback_process: self._handle_output(proc)
@@ -470,11 +383,6 @@ class VideoBlurrer(QObject):
         audio_falback_process.finished.connect(self._on_fallback_extract_finished)
         audio_falback_process.errorOccurred.connect(self._on_process_error)
         started = audio_falback_process.start(extract_cmd[0], extract_cmd[1:])
-
-#        if not started:
-#            self.error.emit("Failed to start FFmpeg for fallback extraction")
-#            self._cleanup()
-#            self.finished.emit(1)
 
     def _on_fallback_extract_finished(self, exit_code, exit_status):
         if self.is_cancelled:
@@ -496,7 +404,6 @@ class VideoBlurrer(QObject):
             sf.write(self.shifted_audio_path, y_shifted, sr)
             self.progress.emit("Fallback pitch shift complete.")
             self.current_step = "final_merge"
-#            self._final_merge(self.shifted_audio_path, self.shifted_audio_path)
             QTimer.singleShot(50, lambda: self._final_merge(self.shifted_audio_path, self.shifted_audio_path))
         except Exception as e:
             self.error.emit(f"Librosa fallback failed: {str(e)}")
@@ -520,7 +427,7 @@ class VideoBlurrer(QObject):
             final_output
         ]
 
-        final_merge_process = QProcess()
+        final_merge_process = QProcess(self)
         final_merge_process.finished.connect(lambda code, status: self._on_final_merge_finished(code, final_output, temp_audio))
         final_merge_process.errorOccurred.connect(self._on_process_error)
         final_merge_process.readyReadStandardOutput.connect(
@@ -553,57 +460,70 @@ class VideoBlurrer(QObject):
         self.error.emit(f"FFmpeg process error: {error}")
         self.finished.emit(1)
 
-    def cancel(self):
-        """Cancel the entire processing pipeline safely"""
-        if self.is_cancelled:
-            return  # already cancelled
-
-        self.is_cancelled = True
-#        print("DEBUG: Cancel requested - terminating current process")
-
-        # Terminate any active QProcess
-        if self.process and self.process.state() == QProcess.Running:
-            self.process.terminate()  # polite terminate
-            # Optional: give it 2 seconds to terminate gracefully
-            QTimer.singleShot(2000, self._force_kill_process)
-
-        # Close any open write channel (for piped encoding)
-        if self.process and self.process.state() != QProcess.NotRunning:
-            self.process.closeWriteChannel()
-
-        # Emit feedback
-        self.progress.emit("Processing cancelled")
-        if self.progress_callback:
-            self.progress_callback(0, 0, "Processing cancelled")
-
-        self.finished.emit(0)  # success exit code for cancel
-
-    def _force_kill_process(self):
-        """Force kill if terminate() didn't work"""
-        if self.process and self.process.state() == QProcess.Running:
-#            print("DEBUG: Force killing FFmpeg process")
-            self.process.kill()
-
     def _cleanup(self):
+        if hasattr(self, 'writer') and self.writer:
+            self.writer.release()
         for f in self.temp_files:
             if os.path.exists(f):
                 try:
-                    os.remove(f)
+                    if os.path.isdir(f):
+                        shutil.rmtree(f)
+                    else:
+                        os.remove(f)
                 except:
                     pass
+
+        self.temp_files.clear()
         self.temp_files = []
         if self.cap:
             self.cap.release()
 
+    def cancel(self):
+        """Cancel the entire processing pipeline safely"""
+        if self.is_cancelled:
+            return
+        self.is_cancelled = True
+        self.progress.emit("Processing cancelled by user")
+
+        # Terminate any active audio-related QProcess
+        audio_processes = [
+            getattr(self, attr, None)
+            for attr in [
+                'reencode_process', 'extract_process', 'shift_process',
+                'audio_fallback_process', 'final_merge_process'
+            ]
+            if hasattr(self, attr)
+        ]
+
+        for proc in audio_processes:
+            if proc and isinstance(proc, QProcess) and proc.state() == QProcess.Running:
+                proc.terminate()
+                # Force kill after 2s if still running
+                QTimer.singleShot(2000, lambda p=proc: p.kill() if p.state() == QProcess.Running else None)
+
+        # No video pipe anymore — nothing to closeWriteChannel()
+        if self.progress_callback:
+            self.progress_callback(0, 0, "Processing cancelled")
+        self.finished.emit(0)  # Success code for cancel
+
+    def _force_kill_process(self):
+        """Force kill any hung audio FFmpeg process (called by timer)"""
+        # You can keep this as-is, or make it more specific to audio
+        for attr in ['reencode_process', 'extract_process', 'shift_process', 'audio_fallback_process', 'final_merge_process']:
+            proc = getattr(self, attr, None)
+            if proc and isinstance(proc, QProcess) and proc.state() == QProcess.Running:
+                proc.kill()
+                self.progress.emit("Force killed hung FFmpeg process")
+
     def _handle_output(self, process: QProcess):
-        """Handle output from a specific QProcess instance"""
+        """Handle output from audio-related QProcess instances"""
         data = process.readAllStandardOutput().data().decode(errors='ignore').strip()
         if data:
             self.progress.emit(data)
 
-    def _handle_output2(self):
-        """Handle QProcess readyReadStandardOutput signal for progress/output"""
-        if self.process:
-            data = self.process.readAllStandardOutput().data().decode().strip()
-            if data:
-                self.progress.emit(data)            
+    def _on_process_error(self, error):
+        """Handle QProcess errorOccurred signal (for audio steps)"""
+        if error in (0, 1):  # Ignore common false positives
+            return
+        self.error.emit(f"FFmpeg process error: {error}")
+        self.finished.emit(1)             

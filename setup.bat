@@ -41,6 +41,8 @@ echo.
 echo Installing dependencies...
 echo This may take a few minutes...
 pip install -r requirements.txt
+echo installing torch family from the CUDA 13.0 wheel index
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
 echo.
 
 if errorlevel 1 (
